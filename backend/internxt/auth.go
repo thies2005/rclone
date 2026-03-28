@@ -164,11 +164,24 @@ func (f *Fs) reLogin(ctx context.Context) (*internxtauth.AccessResponse, error) 
 		return nil, fmt.Errorf("re-login check failed: %w", err)
 	}
 
+	var tfaCode string
 	if loginResp.TFA {
-		return nil, errors.New("account requires 2FA - please run: rclone config reconnect " + f.name + ":")
+		totpSecret := f.opt.TOTPSecret
+		if totpSecret != "" {
+			totpSecret, err = obscure.Reveal(totpSecret)
+			if err != nil {
+				return nil, fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+			}
+			tfaCode, err = generateTOTPCode(totpSecret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate TOTP code: %w", err)
+			}
+		} else {
+			return nil, errors.New("account requires 2FA but no totp_secret configured - please run: rclone config reconnect " + f.name + ":")
+		}
 	}
 
-	resp, err := internxtauth.DoLogin(ctx, cfg, f.opt.Email, password, "")
+	resp, err := internxtauth.DoLogin(ctx, cfg, f.opt.Email, password, tfaCode)
 	if err != nil {
 		return nil, fmt.Errorf("re-login failed: %w", err)
 	}

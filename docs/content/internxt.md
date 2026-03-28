@@ -64,6 +64,20 @@ y/e/d> y
 
 If you have two-factor authentication enabled on your Internxt account, you will be prompted to enter the code during login.
 
+#### Automatic 2FA re-authentication
+
+If your account uses TOTP-based two-factor authentication, you can enable fully automatic re-authentication by setting the `totp_secret` advanced option to the base32 TOTP seed from your authenticator app.
+
+**Warning:** The TOTP secret is as sensitive as your password. Anyone with access to it can generate valid 2FA codes for your account. Encrypt your rclone config with `rclone config password` to protect it.
+
+Example:
+
+```
+rclone config update internxt totp_secret=JBSWY3DPEHPK3PXP
+```
+
+When `totp_secret` is set, rclone will generate one-time codes in memory during automatic re-login. The generated codes are never stored or logged.
+
 ### Security Considerations
 
 The authentication process stores your password and mnemonic in the rclone configuration file. It is **strongly recommended** to encrypt your rclone config to protect these sensitive credentials:

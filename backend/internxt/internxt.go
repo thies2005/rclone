@@ -97,6 +97,11 @@ func init() {
 			Sensitive: true,
 			Hide:      fs.OptionHideBoth,
 		}, {
+			Name:       "totp_secret",
+			Help:       "TOTP seed for automatic 2FA.\n\nBase32-encoded TOTP secret for generating one-time codes during automatic re-authentication. This is as sensitive as a password — store it securely.",
+			IsPassword: true,
+			Advanced:   true,
+		}, {
 			Name:     "skip_hash_validation",
 			Default:  true,
 			Advanced: true,
@@ -192,6 +197,7 @@ type Options struct {
 	Email              string               `config:"email"`
 	Pass               string               `config:"pass"`
 	TwoFA              string               `config:"2fa"`
+	TOTPSecret         string               `config:"totp_secret"`
 	Mnemonic           string               `config:"mnemonic"`
 	SkipHashValidation bool                 `config:"skip_hash_validation"`
 	Encoding           encoder.MultiEncoder `config:"encoding"`
