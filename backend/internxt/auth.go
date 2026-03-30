@@ -168,9 +168,9 @@ func (f *Fs) reLogin(ctx context.Context) (*internxtauth.AccessResponse, error) 
 	if loginResp.TFA {
 		totpSecret := f.opt.TOTPSecret
 		if totpSecret != "" {
-			totpSecret, err = obscure.Reveal(totpSecret)
-			if err != nil {
-				return nil, fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+			revealed, err := obscure.Reveal(totpSecret)
+			if err == nil {
+				totpSecret = revealed
 			}
 			tfaCode, err = generateTOTPCode(totpSecret)
 			if err != nil {

@@ -142,10 +142,9 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 
 	totpSecret, _ := m.Get("totp_secret")
 	if totpSecret != "" {
-		var err error
-		totpSecret, err = obscure.Reveal(totpSecret)
-		if err != nil {
-			return nil, fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+		revealed, err := obscure.Reveal(totpSecret)
+		if err == nil {
+			totpSecret = revealed
 		}
 	}
 
@@ -287,9 +286,9 @@ func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt 
 	if loginResp.TFA {
 		totpSecret, _ := m.Get("totp_secret")
 		if totpSecret != "" {
-			totpSecret, err = obscure.Reveal(totpSecret)
-			if err != nil {
-				return fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+			revealed, err := obscure.Reveal(totpSecret)
+			if err == nil {
+				totpSecret = revealed
 			}
 			tfaCode, err = generateTOTPCode(totpSecret)
 			if err != nil {
