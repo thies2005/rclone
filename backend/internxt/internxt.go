@@ -267,6 +267,59 @@ func (f *Fs) Precision() time.Duration {
 	return fs.ModTimeNotSupported
 }
 
+// doBootstrapLogin performs a full login using stored email+password
+// to obtain the mnemonic and token when they are missing from config.
+func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt *Options) error {
+	password, err := obscure.Reveal(opt.Pass)
+	if err != nil {
+		return fmt.Errorf("couldn't decrypt password: %w", err)
+	}
+
+	authCfg := config.NewDefaultToken("")
+	authCfg.HTTPClient = fshttp.NewClient(ctx)
+
+	loginResp, err := auth.Login(ctx, authCfg, opt.Email)
+	if err != nil {
+		return fmt.Errorf("login check failed: %w", err)
+	}
+
+	var tfaCode string
+	if loginResp.TFA {
+		totpSecret, _ := m.Get("totp_secret")
+		if totpSecret != "" {
+			totpSecret, err = obscure.Reveal(totpSecret)
+			if err != nil {
+				return fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+			}
+			tfaCode, err = generateTOTPCode(totpSecret)
+			if err != nil {
+				return fmt.Errorf("failed to generate TOTP code: %w", err)
+			}
+		} else {
+			return errors.New("account requires 2FA but no totp_secret configured")
+		}
+	}
+
+	resp, err := auth.DoLogin(ctx, authCfg, opt.Email, password, tfaCode)
+	if err != nil {
+		return fmt.Errorf("login failed: %w", err)
+	}
+
+	m.Set("mnemonic", obscure.MustObscure(resp.User.Mnemonic))
+
+	oauthToken, err := jwtToOAuth2Token(resp.NewToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse token: %w", err)
+	}
+	err = oauthutil.PutToken(name, m, oauthToken, true)
+	if err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
+	}
+
+	fs.Infof(name, "Bootstrap login succeeded, mnemonic and token saved to config")
+	return nil
+}
+
 // NewFs constructs an Fs from the path
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
 	opt := new(Options)
@@ -275,7 +328,15 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	}
 
 	if opt.Mnemonic == "" {
-		return nil, errors.New("mnemonic is required - please run: rclone config reconnect " + name + ":")
+		fs.Infof(name, "No mnemonic found in config, performing login to obtain one")
+		err := doBootstrapLogin(ctx, name, m, opt)
+		if err != nil {
+			return nil, fmt.Errorf("mnemonic is required and auto-login failed: %w", err)
+		}
+		opt.Mnemonic, _ = m.Get("mnemonic")
+		if opt.Mnemonic == "" {
+			return nil, errors.New("mnemonic is required - please run: rclone config reconnect " + name + ":")
+		}
 	}
 
 	var err error
@@ -287,15 +348,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	oauthToken, err := oauthutil.GetToken(name, m)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get token - please run: rclone config reconnect %s: - %w", name, err)
-	}
-
-	oauthConfig := &oauthutil.Config{
-		TokenURL: "https://gateway.internxt.com/drive/users/refresh",
-	}
-
-	_, ts, err := oauthutil.NewClient(ctx, name, m, oauthConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create oauth client: %w", err)
 	}
 
 	cfg := config.NewDefaultToken(oauthToken.AccessToken)
@@ -353,15 +405,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	f.features = (&fs.Features{
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
-
-	if ts != nil {
-		f.tokenRenewer = oauthutil.NewRenew(f.String(), ts, func() error {
-			f.authMu.Lock()
-			defer f.authMu.Unlock()
-			return f.refreshOrReLogin(ctx)
-		})
-		f.tokenRenewer.Start()
-	}
 
 	f.dirCache = dircache.New(f.root, cfg.RootFolderID, f)
 
