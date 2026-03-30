@@ -99,6 +99,7 @@ func init() {
 		}, {
 			Name:       "totp_secret",
 			Help:       "TOTP seed for automatic 2FA.\n\nBase32-encoded TOTP secret for generating one-time codes during automatic re-authentication. This is as sensitive as a password — store it securely.",
+			Sensitive:  true,
 			IsPassword: true,
 			Advanced:   true,
 		}, {

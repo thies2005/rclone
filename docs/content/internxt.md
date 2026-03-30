@@ -162,6 +162,21 @@ Properties:
 - Type:        string
 - Required:    false
 
+#### --internxt-totp-secret
+
+TOTP seed for automatic 2FA.
+
+Base32-encoded TOTP secret for generating one-time codes during automatic re-authentication. This is as sensitive as a password — store it securely.
+
+**NB** Input to this must be obscured - see [rclone obscure](/commands/rclone_obscure/).
+
+Properties:
+
+- Config:      totp_secret
+- Env Var:     RCLONE_INTERNXT_TOTP_SECRET
+- Type:        string
+- Required:    false
+
 #### --internxt-skip-hash-validation
 
 Skip hash validation when downloading files.
