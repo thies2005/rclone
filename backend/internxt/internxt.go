@@ -140,19 +140,34 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 	cfg := config.NewDefaultToken("")
 	cfg.HTTPClient = fshttp.NewClient(ctx)
 
+	totpSecret, _ := m.Get("totp_secret")
+	if totpSecret != "" {
+		var err error
+		totpSecret, err = obscure.Reveal(totpSecret)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't decrypt totp_secret: %w", err)
+		}
+	}
+
 	switch configIn.State {
 	case "":
-		// Check if 2FA is required
 		loginResp, err := auth.Login(ctx, cfg, email)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check login requirements: %w", err)
 		}
 
 		if loginResp.TFA {
+			if totpSecret != "" {
+				tfaCode, err := generateTOTPCode(totpSecret)
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate TOTP code: %w", err)
+				}
+				m.Set("2fa_code", tfaCode)
+				return fs.ConfigGoto("login")
+			}
 			return fs.ConfigInput("2fa", "config_2fa", "Two-factor authentication code")
 		}
 
-		// No 2FA required, do login directly
 		return fs.ConfigGoto("login")
 
 	case "2fa":
@@ -171,10 +186,8 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 			return nil, fmt.Errorf("login failed: %w", err)
 		}
 
-		// Store mnemonic (obscured)
 		m.Set("mnemonic", obscure.MustObscure(loginResp.User.Mnemonic))
 
-		// Store token
 		oauthToken, err := jwtToOAuth2Token(loginResp.NewToken)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse token: %w", err)
@@ -184,7 +197,6 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 			return nil, fmt.Errorf("failed to save token: %w", err)
 		}
 
-		// Clear temporary 2FA code
 		m.Set("2fa_code", "")
 
 		return nil, nil
