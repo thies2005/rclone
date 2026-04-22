@@ -41,6 +41,13 @@ const (
 	decayConstant = 2 // bigger for slower decay, exponential
 )
 
+var renewerOAuthConfig = &oauthutil.Config{
+	ClientID:     "internxt",
+	ClientSecret: "internxt",
+	AuthURL:      "https://app.internxt.com",
+	TokenURL:     "https://api.internxt.com",
+}
+
 // shouldRetry determines if an error should be retried.
 // On 401, it attempts to re-authorize before retrying.
 // On 429, it honours the server's rate limit retry delay.
@@ -225,6 +232,7 @@ type Fs struct {
 	cfg          *config.Config
 	features     *fs.Features
 	pacer        *fs.Pacer
+	tokenSource  *oauthutil.TokenSource
 	tokenRenewer *oauthutil.Renew
 	bridgeUser   string
 	userID       string
@@ -319,6 +327,34 @@ func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt 
 	return nil
 }
 
+func (f *Fs) initTokenRenewer(ctx context.Context) error {
+	if f.tokenRenewer != nil {
+		return nil
+	}
+
+	_, ts, err := oauthutil.NewClient(ctx, f.name, f.m, renewerOAuthConfig)
+	if err != nil {
+		return fmt.Errorf("failed to initialize token renewer: %w", err)
+	}
+
+	f.tokenSource = ts
+	_ = ts.OnExpiry()
+	f.tokenRenewer = oauthutil.NewRenew(f.String(), ts, func() error {
+		err := f.renewToken(context.Background())
+		if err != nil {
+			return err
+		}
+		_, err = ts.Token()
+		if err != nil {
+			return fmt.Errorf("failed to reload renewed token in token source: %w", err)
+		}
+		return nil
+	})
+	f.tokenRenewer.Start()
+
+	return nil
+}
+
 // NewFs constructs an Fs from the path
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
 	opt := new(Options)
@@ -405,6 +441,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
 
+	err = f.initTokenRenewer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	f.dirCache = dircache.New(f.root, cfg.RootFolderID, f)
 
 	err = f.dirCache.FindRoot(ctx, false)
@@ -419,6 +460,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			cfg:          f.cfg,
 			features:     f.features,
 			pacer:        f.pacer,
+			tokenSource:  f.tokenSource,
 			tokenRenewer: f.tokenRenewer,
 			bridgeUser:   f.bridgeUser,
 			userID:       f.userID,
