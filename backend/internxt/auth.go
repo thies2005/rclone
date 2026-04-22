@@ -239,12 +239,7 @@ func (f *Fs) refreshOrReLogin(ctx context.Context) error {
 	return nil
 }
 
-// reAuthorize is called after getting 401 from the server.
-// It serializes re-auth attempts and uses a circuit-breaker to avoid infinite loops.
-func (f *Fs) reAuthorize(ctx context.Context) error {
-	f.authMu.Lock()
-	defer f.authMu.Unlock()
-
+func (f *Fs) reAuthorizeLocked(ctx context.Context) error {
 	if f.authFailed {
 		return errors.New("re-authorization permanently failed")
 	}
@@ -256,4 +251,20 @@ func (f *Fs) reAuthorize(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (f *Fs) renewToken(ctx context.Context) error {
+	f.authMu.Lock()
+	defer f.authMu.Unlock()
+
+	return f.reAuthorizeLocked(ctx)
+}
+
+// reAuthorize is called after getting 401 from the server.
+// It serializes re-auth attempts and uses a circuit-breaker to avoid infinite loops.
+func (f *Fs) reAuthorize(ctx context.Context) error {
+	f.authMu.Lock()
+	defer f.authMu.Unlock()
+
+	return f.reAuthorizeLocked(ctx)
 }
