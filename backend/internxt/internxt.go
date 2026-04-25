@@ -147,13 +147,8 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 	cfg := config.NewDefaultToken("")
 	cfg.HTTPClient = fshttp.NewClient(ctx)
 
-	totpSecret, _ := m.Get("totp_secret")
-	if totpSecret != "" {
-		revealed, err := obscure.Reveal(totpSecret)
-		if err == nil {
-			totpSecret = revealed
-		}
-	}
+	totpSecretRaw, _ := m.Get("totp_secret")
+	totpSecret := revealTOTPSecret(totpSecretRaw)
 
 	switch configIn.State {
 	case "":
@@ -292,12 +287,10 @@ func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt 
 
 	var tfaCode string
 	if loginResp.TFA {
-		totpSecret, _ := m.Get("totp_secret")
+		totpSecretRaw, _ := m.Get("totp_secret")
+		totpSecret := revealTOTPSecret(totpSecretRaw)
 		if totpSecret != "" {
-			revealed, err := obscure.Reveal(totpSecret)
-			if err == nil {
-				totpSecret = revealed
-			}
+			var err error
 			tfaCode, err = generateTOTPCode(totpSecret)
 			if err != nil {
 				return fmt.Errorf("failed to generate TOTP code: %w", err)

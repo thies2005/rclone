@@ -166,12 +166,9 @@ func (f *Fs) reLogin(ctx context.Context) (*internxtauth.AccessResponse, error) 
 
 	var tfaCode string
 	if loginResp.TFA {
-		totpSecret := f.opt.TOTPSecret
+		totpSecret := revealTOTPSecret(f.opt.TOTPSecret)
 		if totpSecret != "" {
-			revealed, err := obscure.Reveal(totpSecret)
-			if err == nil {
-				totpSecret = revealed
-			}
+			var err error
 			tfaCode, err = generateTOTPCode(totpSecret)
 			if err != nil {
 				return nil, fmt.Errorf("failed to generate TOTP code: %w", err)
