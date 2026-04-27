@@ -17,7 +17,6 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/obscure"
-	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/lib/oauthutil"
 	"golang.org/x/oauth2"
@@ -150,10 +149,6 @@ func refreshJWTToken(ctx context.Context, name string, m configmap.Mapper) error
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	if resp.User.Bucket != "" {
-		m.Set("bucket", resp.User.Bucket)
-	}
-
 	fs.Debugf(name, "Token refreshed successfully, new expiry: %v", token.Expiry)
 	return nil
 }
@@ -163,8 +158,7 @@ func refreshJWTToken(ctx context.Context, name string, m configmap.Mapper) error
 func (f *Fs) reLogin(ctx context.Context) (*internxtauth.AccessResponse, error) {
 	password, err := obscure.Reveal(f.opt.Pass)
 	if err != nil {
-		fs.Debugf(f, "Password is not obscured, using as plaintext")
-		password = f.opt.Pass
+		return nil, fmt.Errorf("password appears to be stored as plaintext - please recreate this remote with: rclone config reconnect %s:", f.name)
 	}
 
 	cfg := internxtconfig.NewDefaultToken("")
@@ -214,9 +208,6 @@ func (f *Fs) refreshOrReLogin(ctx context.Context) error {
 
 	var httpErr *sdkerrors.HTTPError
 	if !errors.As(refreshErr, &httpErr) || httpErr.StatusCode() != 401 {
-		if fserrors.ShouldRetry(refreshErr) {
-			return refreshErr
-		}
 		return refreshErr
 	}
 
@@ -248,17 +239,7 @@ func (f *Fs) refreshOrReLogin(ctx context.Context) error {
 }
 
 func (f *Fs) reAuthorizeLocked(ctx context.Context) error {
-	if f.authFailed {
-		return errors.New("re-authorization permanently failed")
-	}
-
-	err := f.refreshOrReLogin(ctx)
-	if err != nil {
-		f.authFailed = true
-		return err
-	}
-
-	return nil
+	return f.refreshOrReLogin(ctx)
 }
 
 func (f *Fs) renewToken(ctx context.Context) error {
@@ -269,7 +250,7 @@ func (f *Fs) renewToken(ctx context.Context) error {
 }
 
 // reAuthorize is called after getting 401 from the server.
-// It serializes re-auth attempts and uses a circuit-breaker to avoid infinite loops.
+// It serializes concurrent re-auth attempts under authMu.
 func (f *Fs) reAuthorize(ctx context.Context) error {
 	f.authMu.Lock()
 	defer f.authMu.Unlock()

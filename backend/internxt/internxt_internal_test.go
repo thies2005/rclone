@@ -49,12 +49,12 @@ func TestInitTokenRenewerAndShutdown(t *testing.T) {
 	}
 }
 
-func TestRenewTokenUsesAuthCircuitBreaker(t *testing.T) {
+func TestReAuthorizeLockedReturnsErrorWithNoCredentials(t *testing.T) {
 	t.Parallel()
 
-	f := &Fs{authFailed: true}
-	err := f.renewToken(context.Background())
+	f := &Fs{name: "test", m: configmap.Simple{}}
+	err := f.reAuthorizeLocked(context.Background())
 	if err == nil {
-		t.Fatal("expected renewToken to return an error when auth has permanently failed")
+		t.Fatal("expected reAuthorizeLocked to return an error with no credentials")
 	}
 }

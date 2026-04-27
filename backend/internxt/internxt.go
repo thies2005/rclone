@@ -59,15 +59,12 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 	if errors.As(err, &httpErr) {
 		switch httpErr.StatusCode() {
 		case 401:
-			if !f.authFailed {
-				authErr := f.reAuthorize(ctx)
-				if authErr != nil {
-					fs.Debugf(f, "Re-authorization failed: %v", authErr)
-					return false, err
-				}
-				return true, err
+			authErr := f.reAuthorize(ctx)
+			if authErr != nil {
+				fs.Debugf(f, "Re-authorization failed: %v", authErr)
+				return false, err
 			}
-			return false, err
+			return true, err
 		case 429:
 			delay := httpErr.RetryAfter()
 			if delay <= 0 {
@@ -140,7 +137,7 @@ func Config(ctx context.Context, name string, m configmap.Mapper, configIn fs.Co
 		var err error
 		pass, err = obscure.Reveal(pass)
 		if err != nil {
-			return nil, fmt.Errorf("couldn't decrypt password: %w", err)
+			return nil, fmt.Errorf("password appears to be stored as plaintext - please recreate this remote with: rclone config reconnect %s:", name)
 		}
 	}
 
@@ -232,7 +229,6 @@ type Fs struct {
 	bridgeUser   string
 	userID       string
 	authMu       sync.Mutex
-	authFailed   bool
 }
 
 // Object holds the data for a remote file object
@@ -274,8 +270,7 @@ func (f *Fs) Precision() time.Duration {
 func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt *Options) error {
 	password, err := obscure.Reveal(opt.Pass)
 	if err != nil {
-		fs.Debugf(nil, "Password is not obscured, using as plaintext")
-		password = opt.Pass
+		return fmt.Errorf("password appears to be stored as plaintext - please recreate this remote with: rclone config reconnect %s:", name)
 	}
 
 	authCfg := config.NewDefaultToken("")
@@ -332,7 +327,7 @@ func (f *Fs) initTokenRenewer(ctx context.Context) error {
 	}
 
 	f.tokenSource = ts
-	_ = ts.OnExpiry()
+	ts.OnExpiry()
 	f.tokenRenewer = oauthutil.NewRenew(f.String(), ts, func() error {
 		err := f.renewToken(context.Background())
 		if err != nil {
