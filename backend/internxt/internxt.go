@@ -274,7 +274,8 @@ func (f *Fs) Precision() time.Duration {
 func doBootstrapLogin(ctx context.Context, name string, m configmap.Mapper, opt *Options) error {
 	password, err := obscure.Reveal(opt.Pass)
 	if err != nil {
-		return fmt.Errorf("couldn't decrypt password: %w", err)
+		fs.Debugf(nil, "Password is not obscured, using as plaintext")
+		password = opt.Pass
 	}
 
 	authCfg := config.NewDefaultToken("")
@@ -396,10 +397,23 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	var userInfo *userInfo
 	const maxRetries = 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		userInfo, err = getUserInfo(ctx, &userInfoConfig{Token: f.cfg.Token})
-		if err == nil {
+		result, getInfoErr := getUserInfo(ctx, &userInfoConfig{Token: f.cfg.Token})
+		if getInfoErr == nil {
+			userInfo = result.Info
+			if result.NewToken != "" {
+				oauthToken, parseErr := jwtToOAuth2Token(result.NewToken)
+				if parseErr == nil {
+					if saveErr := oauthutil.PutToken(name, m, oauthToken, false); saveErr != nil {
+						fs.Debugf(f, "Failed to save refreshed token from getUserInfo: %v", saveErr)
+					} else {
+						f.cfg.Token = result.NewToken
+						fs.Debugf(f, "Saved refreshed token from getUserInfo, new expiry: %v", oauthToken.Expiry)
+					}
+				}
+			}
 			break
 		}
+		err = getInfoErr
 
 		var httpErr *sdkerrors.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode() == 401 {
@@ -408,8 +422,9 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			if authErr != nil {
 				return nil, fmt.Errorf("failed to fetch user info (re-auth failed): %w", err)
 			}
-			userInfo, err = getUserInfo(ctx, &userInfoConfig{Token: f.cfg.Token})
+			result, err = getUserInfo(ctx, &userInfoConfig{Token: f.cfg.Token})
 			if err == nil {
+				userInfo = result.Info
 				break
 			}
 			return nil, fmt.Errorf("failed to fetch user info after re-auth: %w", err)
