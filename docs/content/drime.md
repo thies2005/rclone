@@ -4,7 +4,7 @@ description: "Rclone docs for Drime"
 versionIntroduced: "v1.73"
 ---
 
-# {{< icon "fa fa-cloud" >}} Drime
+# Drime
 
 [Drime](https://drime.cloud/) is a cloud storage and transfer service focused
 on fast, resilient file delivery. It offers both free and paid tiers with
@@ -234,7 +234,7 @@ Properties:
 - Config:      upload_cutoff
 - Env Var:     RCLONE_DRIME_UPLOAD_CUTOFF
 - Type:        SizeSuffix
-- Default:     200Mi
+- Default:     5Mi
 
 #### --drime-chunk-size
 

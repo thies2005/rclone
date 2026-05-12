@@ -1095,3 +1095,31 @@ put them back in again. -->
 - razorloves <razorloves@gmail.com>
 - Duncan F <131309315+duncanaf@users.noreply.github.com>
 - Billy Hughes <w.g.h.hughes@gmail.com>
+- Bhagyashreek8 <57988406+Bhagyashreek8@users.noreply.github.com>
+- Andriy Senyshyn <135705861+sam-mt@users.noreply.github.com>
+- Andrew Furman <7343697+furmandev@users.noreply.github.com>
+- ZRHan <56144550+ZRHann@users.noreply.github.com>
+- Jason <jasonbabo@gmail.com>
+- Patrick Farrell <pfarrell@whamcloud.com>
+- BizaNator <17164422+BizaNator@users.noreply.github.com>
+- lif <1835304752@qq.com>
+- jinkeyuu <44105232+jinkeyuu@users.noreply.github.com>
+- jinyu.han <jinyu.han@ucloud.cn>
+- Claude Opus 4.6 <noreply@anthropic.com>
+- Andriy Senyshyn <andriy.senyshyn@kiteworks.com>
+- Mike GIllan <mike.gillan@gmail.com>
+- Xiangzhe <xiangzhedev@gmail.com>
+- Suyun <suyun@aosc.io>
+- TheBabu <ariq.haqq@gmail.com>
+- Brais Couce <braiscouce@gmail.com>
+- Mozi <29089388+pzhlkj6612@users.noreply.github.com>
+- SyoBoN <syobon@syobon.net>
+- Jan Heylen <heyleke@gmail.com>
+- tdawe <90407556+tdawe1@users.noreply.github.com>
+- Anton Bordwine <54022438+antonchuvashow@users.noreply.github.com>
+- mathieulongtin <617359+mathieulongtin@users.noreply.github.com>
+- Luke Cyca <me@lukecyca.com>
+- dlaumen <262192488+dlaumen@users.noreply.github.com>
+- Yakov Till <37628546+Lyapsus@users.noreply.github.com>
+- Chris Coughlan <chris@coughlan.io>
+- John Volk <volkjohn@users.noreply.github.com>

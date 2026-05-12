@@ -820,6 +820,12 @@ running -- and you can therefore be reasonably sure that any *expired* lock
 file you may find was left there by an interrupted run, not one that is still
 running and just taking awhile.
 
+If a lock file exists but its contents are unreadable (for example, due to an
+incomplete write or disk error), it is treated as expired when `--max-lock` is
+set to a value greater than `0`. If `--max-lock` is `0` or not set, an
+unreadable lock file will produce an error and block future runs until removed
+manually.
+
 If `--max-lock` is `0` or not set, the default is that lock files will never
 expire, and will block future runs (of these same two bisync paths)
 indefinitely.
@@ -1049,11 +1055,16 @@ The following backends have known issues that need more investigation:
 <!--- start list_failures - DO NOT EDIT THIS SECTION - use make commanddocs --->
 - `TestDropbox` (`dropbox`)
   - [`TestBisyncRemoteRemote/normalization`](https://pub.rclone.org/integration-tests/current/dropbox-cmd.bisync-TestDropbox-1.txt)
-- `TestSeafile` (`seafile`)
-  - [`TestBisyncLocalRemote/volatile`](https://pub.rclone.org/integration-tests/current/seafile-cmd.bisync-TestSeafile-1.txt)
-- `TestSeafileV6` (`seafile`)
-  - [`TestBisyncLocalRemote/volatile`](https://pub.rclone.org/integration-tests/current/seafile-cmd.bisync-TestSeafileV6-1.txt)
-- Updated: 2026-01-30-010015
+- `TestHuaweiDrive` (`huaweidrive`)
+  - [`TestBisyncRemoteLocal/ext_paths`](https://pub.rclone.org/integration-tests/current/huaweidrive-cmd.bisync-TestHuaweiDrive-1.txt)
+  - [`TestBisyncRemoteLocal/extended_filenames`](https://pub.rclone.org/integration-tests/current/huaweidrive-cmd.bisync-TestHuaweiDrive-1.txt)
+  - [`TestBisyncRemoteLocal/normalization`](https://pub.rclone.org/integration-tests/current/huaweidrive-cmd.bisync-TestHuaweiDrive-1.txt)
+  - [`TestBisyncLocalRemote/ext_paths`](https://pub.rclone.org/integration-tests/current/huaweidrive-cmd.bisync-TestHuaweiDrive-1.txt)
+  - [`TestBisyncLocalRemote/extended_filenames`](https://pub.rclone.org/integration-tests/current/huaweidrive-cmd.bisync-TestHuaweiDrive-1.txt)
+  - [4 more](https://pub.rclone.org/integration-tests/current/)
+- `TestS3R2` (`s3`)
+  - [`TestBisyncRemoteRemote/normalization`](https://pub.rclone.org/integration-tests/current/s3-cmd.bisync-TestS3R2-1.txt)
+- Updated: 2026-05-08-010013
 <!--- end list_failures - DO NOT EDIT THIS SECTION - use make commanddocs --->
 
 The following backends either have not been tested recently or have known issues
