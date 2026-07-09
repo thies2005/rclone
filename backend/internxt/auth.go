@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	mrand "math/rand"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -169,21 +170,48 @@ func (f *Fs) reLogin(ctx context.Context) (*internxtauth.AccessResponse, error) 
 		return nil, fmt.Errorf("re-login check failed: %w", err)
 	}
 
-	var tfaCode string
 	if loginResp.TFA {
 		totpSecret := revealTOTPSecret(f.opt.TOTPSecret)
-		if totpSecret != "" {
-			var err error
-			tfaCode, err = generateTOTPCode(totpSecret)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate TOTP code: %w", err)
-			}
-		} else {
+		if totpSecret == "" {
 			return nil, errors.New("account requires 2FA but no totp_secret configured - please run: rclone config reconnect " + f.name + ":")
 		}
+
+		// Try the current TOTP window (T), then T-1 and T+1 to tolerate clock
+		// skew between the device and the Internxt API. A 401/403 on the 2FA
+		// code is treated as "wrong window, try the next"; any other error is
+		// returned immediately.
+		timeOffsets := []int64{0, -1, 1}
+		var lastLoginErr error
+		for i, offset := range timeOffsets {
+			code, genErr := generateTOTPCodeWithOffset(totpSecret, offset)
+			if genErr != nil {
+				return nil, fmt.Errorf("failed to generate TOTP code: %w", genErr)
+			}
+			if offset != 0 {
+				fs.Debugf(f, "Generated TOTP code for 2FA with time offset %d (attempt %d/3)", offset, i+1)
+			} else {
+				fs.Debugf(f, "Generated TOTP code for 2FA (attempt 1/3)")
+			}
+
+			resp, loginErr := internxtauth.DoLogin(ctx, cfg, f.opt.Email, password, code)
+			if loginErr == nil {
+				if offset != 0 {
+					fs.Debugf(f, "2FA succeeded with time offset %d", offset)
+				}
+				return resp, nil
+			}
+			var httpErr *sdkerrors.HTTPError
+			if errors.As(loginErr, &httpErr) && (httpErr.StatusCode() == 401 || httpErr.StatusCode() == 403) {
+				lastLoginErr = loginErr
+				fs.Debugf(f, "2FA failed with time offset %d, trying next window", offset)
+				continue
+			}
+			return nil, fmt.Errorf("re-login failed: %w", loginErr)
+		}
+		return nil, fmt.Errorf("re-login failed (all TOTP time windows failed): %w", lastLoginErr)
 	}
 
-	resp, err := internxtauth.DoLogin(ctx, cfg, f.opt.Email, password, tfaCode)
+	resp, err := internxtauth.DoLogin(ctx, cfg, f.opt.Email, password, "")
 	if err != nil {
 		return nil, fmt.Errorf("re-login failed: %w", err)
 	}
@@ -249,11 +277,67 @@ func (f *Fs) renewToken(ctx context.Context) error {
 	return f.reAuthorizeLocked(ctx)
 }
 
+// getBackoffDuration returns the backoff duration for a given attempt number with jitter.
+// Backoff steps: 1m, 5m, 15m, 1h (capped at 1h from attempt 4 on).
+// Adds up to 10% random jitter so concurrent Fs instances don't retry in lockstep.
+func getBackoffDuration(attempt int) time.Duration {
+	var baseDuration time.Duration
+	switch {
+	case attempt == 1:
+		baseDuration = time.Minute
+	case attempt == 2:
+		baseDuration = 5 * time.Minute
+	case attempt == 3:
+		baseDuration = 15 * time.Minute
+	case attempt >= 4:
+		baseDuration = time.Hour
+	default:
+		baseDuration = time.Minute
+	}
+
+	// Subtract up to 10% jitter.
+	jitter := time.Duration(mrand.Int63n(int64(baseDuration) / 10))
+	return baseDuration - jitter
+}
+
 // reAuthorize is called after getting 401 from the server.
-// It serializes concurrent re-auth attempts under authMu.
+// It serializes re-auth attempts under authMu and applies a soft circuit-breaker
+// with exponential backoff so a persistently failing account does not hammer the
+// Internxt API on every operation. After 5 consecutive failures it returns a
+// terminal error ("auth exceeded max retries") that the Android Session Guardian
+// surfaces as a "manual re-auth required" notification.
 func (f *Fs) reAuthorize(ctx context.Context) error {
 	f.authMu.Lock()
 	defer f.authMu.Unlock()
 
-	return f.reAuthorizeLocked(ctx)
+	// Respect the backoff window; callers receive the backoff as an error so the
+	// operation fails fast instead of retrying a known-bad login.
+	if !time.Now().After(f.nextAuthAllowed) {
+		return fmt.Errorf("re-authorization blocked until %v (attempt %d/5)", f.nextAuthAllowed, f.authFailCount)
+	}
+
+	// Terminal state: too many consecutive failures, give up until manual re-auth.
+	if f.authFailCount >= 5 {
+		return errors.New("auth exceeded max retries: manual re-auth required")
+	}
+
+	err := f.reAuthorizeLocked(ctx)
+	if err != nil {
+		// Increment failure count and schedule the next allowed attempt.
+		f.authFailCount++
+		backoff := getBackoffDuration(f.authFailCount)
+		f.nextAuthAllowed = time.Now().Add(backoff)
+		fs.Debugf(f, "Re-authorization failed (attempt %d/5), backing off %v until %v", f.authFailCount, backoff, f.nextAuthAllowed)
+
+		if f.authFailCount >= 5 {
+			return errors.New("auth exceeded max retries: manual re-auth required")
+		}
+		return err
+	}
+
+	// Success - reset the circuit breaker.
+	f.authFailCount = 0
+	f.nextAuthAllowed = time.Time{}
+	fs.Debugf(f, "Re-authorization succeeded, failure count reset to 0")
+	return nil
 }

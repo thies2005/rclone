@@ -9,10 +9,20 @@ import (
 )
 
 func generateTOTPCode(secret string) (string, error) {
+	return generateTOTPCodeWithOffset(secret, 0)
+}
+
+// generateTOTPCodeWithOffset generates a TOTP code for a time window offset from
+// now by the given number of 30-second periods (e.g. -1 = 30s ago, +1 = 30s
+// ahead). It is used to retry 2FA against adjacent windows when clock skew
+// between the device and the Internxt API causes the current-window code to be
+// rejected.
+func generateTOTPCodeWithOffset(secret string, offset int64) (string, error) {
 	if secret == "" {
 		return "", fmt.Errorf("totp_secret is empty")
 	}
-	code, err := totp.GenerateCode(secret, time.Now())
+	t := time.Now().Add(time.Duration(offset) * 30 * time.Second)
+	code, err := totp.GenerateCode(secret, t)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
 	}

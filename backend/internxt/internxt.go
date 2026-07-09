@@ -250,9 +250,11 @@ type Fs struct {
 	pacer        *fs.Pacer
 	tokenSource  *oauthutil.TokenSource
 	tokenRenewer *oauthutil.Renew
-	bridgeUser   string
-	userID       string
-	authMu       sync.Mutex
+	bridgeUser      string
+	userID          string
+	authMu          sync.Mutex
+	authFailCount   int
+	nextAuthAllowed time.Time
 }
 
 // Object holds the data for a remote file object
