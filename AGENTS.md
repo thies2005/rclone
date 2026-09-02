@@ -10,8 +10,11 @@ set of **custom enhancements to the `internxt` backend** that are not (yet)
 in upstream, while otherwise staying in lock-step with upstream releases.
 
 Everything outside `backend/internxt/` is intended to be byte-for-byte
-identical to an upstream release tag. **Do not modify non-internxt code**
-unless you are pulling it in from upstream.
+identical to an upstream release tag (the only other fork-owned files are
+this `AGENTS.md` and the `--internxt-totp-secret` section of
+`docs/content/internxt.md`; upstream ships its own AGENTS.md which ours
+replaces). **Do not modify non-internxt code** unless you are pulling it
+in from upstream.
 
 ## Remotes
 
@@ -29,9 +32,10 @@ git fetch upstream --tags
 
 ## The internxt fork customizations (preserve on every upgrade)
 
-All fork-specific code lives in **`backend/internxt/`**. As of the v1.74.3
-merge the fork differs from upstream by exactly **+507 / -62 lines** across
-these files:
+All fork-specific code lives in **`backend/internxt/`**, plus one docs
+page (`docs/content/internxt.md`, the `--internxt-totp-secret` section)
+and this file. As of the v1.75.0 merge the fork differs from upstream by
+**+598 / -57 lines** across these files:
 
 | file                          | fork-only? | what it does |
 | ----------------------------- | ---------- | ------------ |
@@ -64,14 +68,14 @@ these files:
 
 ## Upgrading to a new upstream release
 
-This is the canonical workflow. It has been clean (no conflicts) for every
-release since v1.74.1 because **upstream does not actively modify
-`backend/internxt/`**.
+This is the canonical workflow. Note: **upstream started actively modifying
+`backend/internxt/` as of v1.75.0** (Move/DirMove, upload size-limit
+handling), so expect internxt itself to change between releases.
 
 1. **Fetch upstream and find the newest tag:**
    ```
    git fetch upstream --tags
-   git tag --sort=-v:refname | head   # newest first, e.g. v1.74.3
+   git tag --sort=-v:refname | head   # newest first, e.g. v1.75.0
    ```
 2. **Sanity-check whether upstream touched internxt** (warns about conflicts):
    ```
@@ -101,6 +105,34 @@ release since v1.74.1 because **upstream does not actively modify
    go test ./backend/internxt/...
    ```
 6. Confirm `VERSION` now reflects the new release, then push.
+
+### Stable-branch point releases are not ancestors of the next minor tag
+
+The v1.74.x point-release tags live on upstream's `v1.74-stable` branch
+and are **not ancestors** of `v1.75.0` (check with
+`git merge-base --is-ancestor <OLD> <NEW>`). Merging v1.75.0 after having
+merged v1.74.3 therefore has a merge base of v1.74.0 and re-applies the
+stable-line changes, producing ~20 conflicts in files the fork never
+touched (`VERSION`, `MANUAL.*`, `go.mod`, `go.sum`, changelog, CI yml,
+`cmd/gui/dist.zip`, ...).
+
+Resolution recipe (used for the v1.75.0 merge):
+
+- Take the upstream side for every conflicted file except `AGENTS.md`,
+  `docs/content/internxt.md`, and `backend/internxt/`:
+  `git checkout --theirs -- <files> && git add <files>`
+- `AGENTS.md`: keep ours (`git checkout --ours -- AGENTS.md`). Upstream
+  ships its own AGENTS.md since v1.75.0; ours describes this fork and
+  replaces it.
+- `docs/content/internxt.md`: keep the fork's `--internxt-totp-secret`
+  block. Upstream also dropped the `--internxt-mnemonic` docs entry
+  because the option is `Hide: fs.OptionHideBoth` — follow upstream there.
+- Then verify the invariant before committing:
+  ```
+  git diff <NEW_TAG> -- . ':(exclude)backend/internxt' \
+    ':(exclude)AGENTS.md' ':(exclude)docs/content/internxt.md'
+  ```
+  must be empty.
 
 ### If upstream *does* modify internxt
 
