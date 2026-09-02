@@ -151,17 +151,6 @@ Properties:
 
 Here are the Advanced options specific to internxt (Internxt Drive).
 
-#### --internxt-mnemonic
-
-Mnemonic (internal use only)
-
-Properties:
-
-- Config:      mnemonic
-- Env Var:     RCLONE_INTERNXT_MNEMONIC
-- Type:        string
-- Required:    false
-
 #### --internxt-totp-secret
 
 TOTP seed for automatic 2FA.
