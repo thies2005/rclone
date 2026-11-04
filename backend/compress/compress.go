@@ -698,6 +698,16 @@ func (f *Fs) putWithCustomFunctions(ctx context.Context, in io.Reader, src fs.Ob
 		return nil, err
 	}
 
+	// Check the source supplied the number of bytes it declared -
+	// compressed data is stored under a name containing the
+	// original size so a mismatch makes the object unreadable.
+	if size := src.Size(); size >= 0 && meta.Size != size {
+		if removeErr := dataObject.Remove(ctx); removeErr != nil {
+			fs.Errorf(dataObject, "Failed to remove partially transferred object: %v", removeErr)
+		}
+		return nil, fmt.Errorf("expected %d bytes in input, but got %d: %w", size, meta.Size, io.ErrUnexpectedEOF)
+	}
+
 	mo, err := f.putMetadata(ctx, meta, src, options, putMeta)
 
 	// meta data upload may fail. in this case we try to remove the original object
@@ -1070,6 +1080,35 @@ type ObjectMetadata struct {
 	CompressionMetadataZstd *SzstdMetadata      // Metadata for Zstd compression
 }
 
+// validate checks metadata read from the wrapped remote before it is used to
+// construct a compressed reader.
+func (meta *ObjectMetadata) validate() error {
+	if meta.Mode != Gzip {
+		return nil
+	}
+	if meta.CompressionMetadataGzip == nil {
+		return errors.New("missing gzip metadata")
+	}
+	if meta.CompressionMetadataGzip.BlockSize <= 0 {
+		return fmt.Errorf("invalid gzip block size %d", meta.CompressionMetadataGzip.BlockSize)
+	}
+	if meta.Size != meta.CompressionMetadataGzip.Size {
+		return errors.New("gzip metadata size does not match object size")
+	}
+	if meta.Size < 0 {
+		return errors.New("invalid gzip object size")
+	}
+	blockSize := int64(meta.CompressionMetadataGzip.BlockSize)
+	blocks := meta.Size / blockSize
+	if meta.Size%blockSize != 0 {
+		blocks++
+	}
+	if int64(len(meta.CompressionMetadataGzip.BlockData)) < blocks {
+		return errors.New("gzip block data is incomplete")
+	}
+	return nil
+}
+
 // Object with external metadata
 type Object struct {
 	fs.Object                 // Wraps around data object for this object
@@ -1091,6 +1130,9 @@ func readMetadata(ctx context.Context, mo fs.Object) (meta *ObjectMetadata, err 
 	jr := json.NewDecoder(rc)
 	meta = new(ObjectMetadata)
 	if err = jr.Decode(meta); err != nil {
+		return nil, err
+	}
+	if err = meta.validate(); err != nil {
 		return nil, err
 	}
 	return meta, nil

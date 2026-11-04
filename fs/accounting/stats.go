@@ -33,7 +33,6 @@ var MaxCompletedTransfers = 100
 // to correctly count the updated fields
 type StatsInfo struct {
 	mu                    sync.RWMutex
-	ctx                   context.Context
 	ci                    *fs.ConfigInfo
 	bytes                 int64
 	errors                int64
@@ -85,7 +84,6 @@ type averageValues struct {
 func NewStats(ctx context.Context) *StatsInfo {
 	ci := fs.GetConfig(ctx)
 	s := &StatsInfo{
-		ctx:                   ctx,
 		ci:                    ci,
 		checking:              newTransferMap(ci.Checkers, "checking"),
 		transferring:          newTransferMap(ci.Transfers, "transferring"),
@@ -518,10 +516,10 @@ func (s *StatsInfo) String() string {
 	// Add per transfer stats if required
 	if !s.ci.StatsOneLine {
 		if !s.checking.empty() {
-			_, _ = fmt.Fprintf(buf, "Checking:\n%s\n", s.checking.String(s.ctx, s.inProgress, s.transferring))
+			_, _ = fmt.Fprintf(buf, "Checking:\n%s\n", s.checking.String(s.ci, s.inProgress, s.transferring))
 		}
 		if !s.transferring.empty() {
-			_, _ = fmt.Fprintf(buf, "Transferring:\n%s\n", s.transferring.String(s.ctx, s.inProgress, nil))
+			_, _ = fmt.Fprintf(buf, "Transferring:\n%s\n", s.transferring.String(s.ci, s.inProgress, nil))
 		}
 	}
 
@@ -805,6 +803,9 @@ func (s *StatsInfo) DoneChecking(remote string) {
 	s.checking.del(remote)
 	s.mu.Lock()
 	s.checks++
+	if s.transferring.empty() && s.checking.empty() {
+		s._stopAverageLoop()
+	}
 	s.mu.Unlock()
 }
 
@@ -844,15 +845,13 @@ func (s *StatsInfo) NewTransferRemoteSize(remote string, size int64, srcFs, dstF
 // if ok is true and it was in the transfermap (to avoid incrementing in case of nested calls, #6213) then it increments the transfers count
 func (s *StatsInfo) DoneTransferring(remote string, ok bool) {
 	existed := s.transferring.del(remote)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if ok && existed {
-		s.mu.Lock()
 		s.transfers++
-		s.mu.Unlock()
 	}
 	if s.transferring.empty() && s.checking.empty() {
-		s.mu.Lock()
 		s._stopAverageLoop()
-		s.mu.Unlock()
 	}
 }
 

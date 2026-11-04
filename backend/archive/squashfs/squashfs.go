@@ -16,6 +16,7 @@ import (
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/log"
 	"github.com/rclone/rclone/lib/readers"
+	"github.com/rclone/rclone/lib/sanitize"
 	"github.com/rclone/rclone/vfs"
 	"github.com/rclone/rclone/vfs/vfscommon"
 )
@@ -41,6 +42,7 @@ type Fs struct {
 	prefix      string   // position for objects
 	prefixSlash string   // position for objects with a slash on
 	root        string   // position to read from within the archive
+	file        string   // remote of the single file root points at, if any
 }
 
 // recoverParsePanic converts a panic raised while parsing a squashfs image
@@ -114,10 +116,13 @@ func New(ctx context.Context, wrappedFs fs.Fs, remote, prefix, root string) (_ f
 			_, err := f.newObjectNative(native)
 			if err == nil {
 				// If it pointed to a file, find the directory above
+				// and remember the file so that only it is listed
 				f.root = path.Dir(f.root)
 				if f.root == "." || f.root == "/" {
 					f.root = ""
 				}
+				f.file = f.prefixSlash + path.Base(native)
+				singleObject = true
 			}
 		}
 	}
@@ -149,7 +154,9 @@ func (f *Fs) Name() string {
 
 // Root of the remote (as passed into NewFs)
 func (f *Fs) Root() string {
-	return f.root
+	// Include the file so the fs cache can tell this Fs apart from
+	// the one for the directory containing it
+	return path.Join(f.root, f.file)
 }
 
 // Features returns the optional features of this Fs
@@ -226,6 +233,10 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	defer log.Trace(f, "dir=%q", dir)("entries=%v, err=%v", &entries, &err)
 	defer recoverParsePanic(&err)
 
+	if f.file != "" && dir != "" {
+		return nil, fs.ErrorDirNotFound
+	}
+
 	nativeDir, err := f.toNative(dir)
 	if err != nil {
 		return nil, err
@@ -237,8 +248,15 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	}
 
 	entries = make(fs.DirEntries, 0, len(items))
+	skipped := 0
 	for _, item := range items {
 		// fs.Debugf(item.Name(), "entry = %#v", item)
+		// Skip entry names that aren't safe
+		if err := sanitize.Leaf(item.Name()); err != nil {
+			fs.Debugf(f, "Skipping squashfs entry %q which escapes the archive", item.Name())
+			skipped++
+			continue
+		}
 		var entry fs.DirEntry
 		if item.IsDir() {
 			remote := f.fromNative(nativeDir, item.Name())
@@ -257,7 +275,16 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 			fs.Debugf(item.Name(), "FIXME Not regular file - skipping")
 			continue
 		}
+		if f.file != "" && entry.Remote() != f.file {
+			continue
+		}
 		entries = append(entries, entry)
+	}
+
+	// Log once per listing rather than per entry so a crafted image
+	// can't flood the log
+	if skipped > 0 {
+		fs.Logf(f, "Skipped %d squashfs entries in %q whose names escape the archive", skipped, dir)
 	}
 
 	// fs.Debugf(f, "dir=%q, entries=%v", dir, entries)
@@ -302,6 +329,9 @@ func (f *Fs) newObjectNative(nativePath string) (o fs.Object, err error) {
 func (f *Fs) NewObject(ctx context.Context, remote string) (o fs.Object, err error) {
 	defer log.Trace(f, "remote=%q", remote)("obj=%v, err=%v", &o, &err)
 
+	if f.file != "" && remote != f.file {
+		return nil, fs.ErrorObjectNotFound
+	}
 	nativePath, err := f.toNative(remote)
 	if err != nil {
 		return nil, err

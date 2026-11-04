@@ -6,6 +6,344 @@ description: "Rclone Changelog"
 
 # Changelog
 
+## v1.75.2 - 2026-10-09
+
+[See commits](https://github.com/rclone/rclone/compare/v1.75.1...v1.75.2)
+
+- Security
+  - b2: Fix account token and SSE-C key leaking on redirects from `--b2-download-url` GHSA-gpw7-77cq-9f72 CVE-PENDING (Nick Craig-Wood)
+  - build
+    - Fix multiple CVEs by upgrading to go1.26.9 (Nick Craig-Wood)
+      - CVE-2026-97032: net/http: HTTP/2 server crash due to HPACK encoder race
+      - CVE-2026-78659: net/http: HTTP/2 server memory exhaustion due to Trailer headers
+      - CVE-2026-97031: crypto/tls: reject malformed ECH outer extension references
+      - CVE-2026-94444: cmd/go: checksum bypass for golang.org/fips140
+      - CVE-2026-94447: cmd/go: checksum database bypass for golang.org/toolchain
+      - CVE-2026-94448: html/template: reset context tracking on consecutive template expressions
+      - CVE-2026-97030: html/template: recognize |yield| as regexp preceder keyword
+      - CVE-2026-94440: net/textproto, mime/multipart: memory limit bypass when parsing MIME headers
+      - CVE-2026-56866: net/http: HTTP/1 client connection desynchronization after CONNECT rejection
+      - CVE-2026-94439: net/http: HTTP/1 server connection desynchronization after 2xx CONNECT response
+      - CVE-2026-78669: net/http: excessive CPU consumption from repeated initial window changes
+      - CVE-2026-78660: net/http: HTTP/2 transport accepts malformed framing-related headers
+      - CVE-2026-56857: os: Root.Mkdir(All) can follow junctions out of the root on Windows
+      - CVE-2026-78667: net/http: lack of limit on size of parsed Range headers
+      - CVE-2026-78663: net/http: double flow control refund on HTTP/2 server streams
+    - Update golang.org/x/net to v0.60.0 to fix multiple CVEs (Nick Craig-Wood)
+      - CVE-2026-78659: net/http: HTTP/2 server memory exhaustion due to Trailer headers
+      - CVE-2026-78669: net/http: excessive CPU consumption from repeated initial window changes
+      - CVE-2026-78663: net/http: double flow control refund on HTTP/2 server streams
+      - CVE-2026-97032: net/http: HTTP/2 server crash due to HPACK encoder race
+    - Update google.golang.org/grpc to fix CVE-2026-84445 (dependabot[bot])
+      - CVE-2026-84445: xds: server panic on a request missing both :authority and Host headers
+  - fshttp: Drop `--header` values over HTTP after HTTPS downgrade GHSA-rrwf-2qr6-p832 CVE-PENDING (Nick Craig-Wood)
+  - http: Stop a path starting with // moving the remote to another host GHSA-xqmq-v4wj-rw5m CVE-PENDING (Nick Craig-Wood)
+  - lib/http: Require authentication for OPTIONS requests GHSA-gj73-fh6v-92fj CVE-PENDING (Nick Craig-Wood)
+  - local: Fix .rclonelink names escaping the root with `--links` GHSA-55qp-jrwr-x827 CVE-PENDING (Nick Craig-Wood)
+  - netstorage
+    - Stop a path starting with // moving the remote to another host GHSA-xqmq-v4wj-rw5m CVE-PENDING (Nick Craig-Wood)
+    - Stop a listing resume token moving signed requests to another host GHSA-xqmq-v4wj-rw5m CVE-PENDING (Nick Craig-Wood)
+  - pcloud
+    - Fix OAuth config accepting callbacks without state GHSA-hvpr-p4pv-4f46 CVE-PENDING (Nick Craig-Wood)
+    - Only accept pCloud hosts from the hostname in the OAuth callback GHSA-hvpr-p4pv-4f46 (Nick Craig-Wood)
+  - selfupdate
+    - Fix hash check trusting unsigned data in the signed SHA256SUMS GHSA-w33h-3qgq-8mv8 CVE-PENDING (Nick Craig-Wood)
+    - Fix release verification instructions trusting unsigned hashes GHSA-w33h-3qgq-8mv8 (Nick Craig-Wood)
+  - serve nfs: Fix path traversal by refusing unsafe file names in the VFS GHSA-44pm-2q5p-fm63 CVE-PENDING (Nick Craig-Wood)
+  - serve s3
+    - Fix presigned URL being turned into a copy of any object GHSA-w3h7-jxxq-vfrp CVE-PENDING (Nick Craig-Wood)
+    - Stop auth proxy users listing or using each other's multipart uploads and metadata GHSA-35g6-9fjv-rmx5 CVE-PENDING (Nick Craig-Wood)
+    - Fix multipart buffer limits being bypassed by overflowing part sizes GHSA-qjw8-8hmp-c3m6 (Nick Craig-Wood)
+    - Add `--multipart-max-uploads` to limit uploads in progress (Nick Craig-Wood)
+    - Add `--multipart-streaming-buffer-total` to limit memory across uploads (Nick Craig-Wood)
+    - Add `--metadata-max-objects` to limit the metadata kept in memory (Nick Craig-Wood)
+  - serve webdav: Fix path traversal above the served directory GHSA-44pm-2q5p-fm63 CVE-PENDING (Nick Craig-Wood)
+  - webdav: Fix headers option leaking to other hosts on redirect GHSA-3rqf-7h69-gg5v CVE-PENDING (Nick Craig-Wood)
+- Bug Fixes
+  - accounting
+    - Stop averaging when the last check finishes (Kunpeng Xie)
+    - Keep speed averaging active when transfers overlap (kaii9)
+  - dedupe: Fix rename mode giving up after 100 names and make it faster (Nick Craig-Wood)
+  - doc fixes (Dhevenddra K G, enkvadrat, GhostCoder6969, James Truitt, maximilize, n4n5, Nick Craig-Wood, PSR94, Rohit Behera, shaurya, subomi)
+  - docker: Fix files uploaded with the wrong mime type (hsdfat)
+  - fs
+    - Fix about showing a negative total when a quota reaches the int64 maximum (youdie006)
+    - Fix bandwidth limits below 1 KiB being multiplied by 1024 (Roland)
+    - Fix `--bwlimit` timetables written out of order using the wrong limit (Rohit Behera)
+    - Make BwTimetable.Set replace the timetable instead of appending to it (youdie006)
+    - Retry "network is unreachable" and "network is down" errors (nielash)
+  - fserrors: Fix out of space detection on Windows (ferrumclaudepilgrim)
+  - lib/rest: Limit the size of HTTP response bodies read into memory (Nick Craig-Wood)
+  - log: Fix race when adding a log output while logging (Nick Craig-Wood)
+  - oauthutil: Fix Renew.Shutdown nil timer panic and race (TastyHeadphones)
+  - operations
+    - Stop `--copy-dest` replacing files with `--immutable` (phatlc)
+    - Fix ignored error in rcat probe reads (Wang Chencheng)
+    - Fix hang when deleting files and a fatal error occurs (Nick Craig-Wood)
+    - Fix hang and lost context when moving a directory file by file (Nick Craig-Wood)
+    - Don't sleep for a Retry-After error when the transfer is cancelled (Nick Craig-Wood)
+  - rc
+    - Make job/status and job/list require authentication (Nick Craig-Wood)
+    - Fix rc API accepting an out of range number and overflowing 64 bits (KBS)
+    - Reject out of range integer parameters instead of truncating them (Nick Craig-Wood)
+    - Fix large numeric parameters being rejected on 32 bit builds (Jeremy Schoemaker)
+  - selfupdate: Fix `--version X.Y` depending on ./ in the download site links (Nick Craig-Wood)
+  - serve
+    - Fix `--auth-proxy` stopping VFS cache uploads after 5 minutes (Nick Craig-Wood)
+    - Fix `--auth-proxy` backends never being shut down after simultaneous logins (Nick Craig-Wood)
+  - serve dlna: Log unescaped paths (phatlc)
+  - serve docker: Fix volume path being lost when the plugin restarts (phatlc)
+  - serve ftp
+    - Fix transfers failing after 5 minutes with `--auth-proxy` (Nick Craig-Wood)
+    - Fix VFS leak when the server fails to start (Nick Craig-Wood)
+  - serve http
+    - Fix downloads failing after 5 minutes with `--auth-proxy` (Nick Craig-Wood)
+    - Escape filename in zip download Content-Disposition header (Harsh Raj Singhania)
+  - serve restic
+    - Fix repositories named data (kaii9)
+    - Prevent concurrent append-only overwrites (Vasek Sraier)
+  - serve s3
+    - Apply the multipart upload limits and `--metadata-max-objects` to each user separately (Nick Craig-Wood)
+    - Stream in-order multipart parts without buffering them (Nick Craig-Wood)
+    - Start the upload to the backend on the first multipart part (Nick Craig-Wood)
+    - Don't buffer re-uploads of multipart parts already streamed (Nick Craig-Wood)
+    - Count buffered multipart parts in whole memory pages (Nick Craig-Wood)
+    - Time out multipart parts waiting for buffer space (Nick Craig-Wood)
+    - Limit the memory requests can use (Nick Craig-Wood)
+    - Forget expired multipart uploads completely (Nick Craig-Wood)
+    - Forget the metadata of deleted objects (Nick Craig-Wood)
+    - List objects lazily so paging a deep hierarchy is fast (Nick Craig-Wood)
+    - Fix multipart upload corruption if the backend write of an early part fails (Nick Craig-Wood)
+    - Fix uploads failing when the auth proxy expires the user's backend (Nick Craig-Wood)
+    - Fix stale metadata being returned for objects changed elsewhere (Nick Craig-Wood)
+    - Fix `--etag-hash auto` crashing or using the wrong hash with `--auth-proxy` (Nick Craig-Wood)
+    - Fix CopyObject of a missing object not returning NoSuchKey (Nick Craig-Wood)
+    - Fix log messages with bad format strings (Nick Craig-Wood)
+    - Document memory use and bring the docs up to date (Nick Craig-Wood)
+  - serve webdav
+    - Fix transfers failing after 5 minutes with `--auth-proxy` (Nick Craig-Wood)
+    - Fix crash when the server fails to start (Nick Craig-Wood)
+    - Escape filename in zip download Content-Disposition header (Harsh Raj Singhania)
+  - vfscache: Fix hang when the cache cleaner is disabled (ferrumclaudepilgrim)
+- Mount
+  - Fix `--daemon` failing when `--rc` is enabled (somaz)
+  - Ignore com.apple.* xattrs on the macOS FSKit backend (Eugene)
+- VFS
+  - Fix reads returning zeros after a file changes during handle caching (Neil Cawse)
+  - Stop setting a file's modtime from discarding its cached data (Neil Cawse)
+  - Fix crash reading the metadata of a file which is being written (Nick Craig-Wood)
+  - Fix a VFS being reused while it is being shut down (Nick Craig-Wood)
+  - Fix AddVirtual ignoring isDir (phatlc)
+  - Stop `--links` objects called "...rclonelink" appearing as ".." in directory listings (Nick Craig-Wood)
+- Local
+  - Fix directories named *.rclonelink being treated as links with `--links` (Nick Craig-Wood)
+- Archive
+  - Fix corrupt listings when listing a zip directory more than once (Nick Craig-Wood)
+  - Fix zip file entries named for a directory causing confusion (Nick Craig-Wood)
+  - Fix listing entries with a leading slash as if they were in the root (Nick Craig-Wood)
+  - Fix crash when creating archive to stdout (Vladimir Babin)
+  - Fix a squashfs path to a single file listing its whole directory (Nick Craig-Wood)
+- Azure Blob
+  - Use the released Azure SDK for Apache Arrow listing (Nick Craig-Wood)
+- Box
+  - Fix log messages with bad format strings (Nick Craig-Wood)
+- Chunker
+  - Fix panic listing a directory after an interrupted upload with meta_format none (Nick Craig-Wood)
+- Compress
+  - Fix crash on ranged reads when gzip metadata is corrupted (Acts1631)
+- Drime
+  - Fix server-side copy over an existing file leaving a "name (1)" copy (Nick Craig-Wood)
+  - Fix deleted files and directories still being listed with hard_delete (Nick Craig-Wood)
+- Drive
+  - Document the Branding step needed to publish your own client_id (Sanjay Kanth A)
+- Dropbox
+  - Fix shared folder mount for roots nested more than one level deep (phatlc)
+  - Match shared-folder and received-file names case-insensitively (phatlc)
+- Filescom
+  - Fix corrupted uploads after a retried upload error (Nick Craig-Wood)
+  - Document that names with / or \ in can't be stored (Nick Craig-Wood)
+- HTTP
+  - Fix crash when the server fails to start (Nick Craig-Wood)
+- Iclouddrive
+  - Fix potential crash looking up items (Nick Craig-Wood)
+- Imagekit
+  - Fix potential crash in rmdir and purge (Nick Craig-Wood)
+- Internxt
+  - Fix lookups of files starting with a dot and dropped uploads (jzunigax2)
+  - Fix sync with `--backup-dir` or `--suffix` deleting the backed up file (Nick Craig-Wood)
+  - Fix server-side moves failing with "Not Found" or "already exists" (Nick Craig-Wood)
+  - Fix "directory not empty" and stale directories after moves and deletes (Nick Craig-Wood)
+  - Fix server-side directory move failing after a gateway timeout (Nick Craig-Wood)
+- Onedrive
+  - Update docs for versions, links and time precision on personal accounts (Nick Craig-Wood)
+  - Document that shared with me shortcuts may fail to list on personal (Nick Craig-Wood)
+  - Update `--onedrive-hard-delete` docs to mention personal account support (foecmke)
+- Oracleobjectstorage
+  - Fix SSE-C server-side copies (tomaszni)
+  - Upload empty streams without multipart (tomaszni)
+- Pixeldrain
+  - Fix corrupted uploads after a retried upload error (Nick Craig-Wood)
+- Premiumizeme
+  - Fix uploading files with ";" in their names (Nick Craig-Wood)
+- S3
+  - Disable signing Accept-Encoding for Ceph and Linode (Aditya)
+  - Fix version-at listings with URL encoded keys (jxj)
+  - Fix storage class missing from `--s3-versions` listings (Dirk Petersen)
+- Seafile
+  - Fix corrupted uploads after a retried upload error (Nick Craig-Wood)
+- SFTP
+  - Fix failed uploads leaving disk space in use on the server (Nick Craig-Wood)
+- Shade
+  - Fix potential crash in directory move (Nick Craig-Wood)
+- Smb
+  - Save the user name in the config even if it matches the current user (phatlc)
+- WebDAV
+  - Fix duplicated listing entries after retried PROPFIND (ZRHann)
+  - Fix "XML syntax error" on paths which don't exist with ownCloud 10.16 (Nick Craig-Wood)
+
+## v1.75.1 - 2026-09-04
+
+[See commits](https://github.com/rclone/rclone/compare/v1.75.0...v1.75.1)
+
+- Security
+  - archive
+    - Fix zip slip path traversal in untrusted zip files GHSA-66hp-wgxq-6f5q CVE-PENDING (Nick Craig-Wood)
+    - Hide any archive entry which escapes the directory being listed GHSA-66hp-wgxq-6f5q (Nick Craig-Wood)
+    - Reject unsafe entry names when mounting squashfs images GHSA-66hp-wgxq-6f5q (Nick Craig-Wood)
+    - Fix zip subdirectory root matching sibling directories GHSA-66hp-wgxq-6f5q (Nick Craig-Wood)
+    - Fix zip entry named "." hiding every other file GHSA-66hp-wgxq-6f5q (Nick Craig-Wood)
+    - Fix "directory not found" for archive paths containing "./" or "//" GHSA-66hp-wgxq-6f5q (Nick Craig-Wood)
+  - build
+    - Fix multiple CVEs by upgrading to go1.26.6 (Nick Craig-Wood)
+      - CVE-2026-56860: net/url: quadratic complexity in resolvePath
+      - CVE-2026-56858: html/template: JavaScript regexp context tracking
+      - CVE-2026-56862: crypto/tls: limit handshake messages accepted post-handshake
+      - CVE-2026-56853: net/http: apply ReadHeaderTimeout to unencrypted HTTP/2 check
+      - CVE-2026-56859: encoding/xml: recursion depth guard during decode
+      - CVE-2026-33818: encoding/asn1: enforce maximum recursion depth
+      - CVE-2026-46600: net: panic parsing an invalid SVCB or HTTPS RR in dnsmessage
+      - CVE-2026-39821: net/http: reject ASCII-only Punycode-encoded labels in idna
+    - Update golang.org/x/crypto to v0.56.0 to fix multiple CVEs (Nick Craig-Wood)
+      - CVE-2026-56854: ssh: source-address critical option not enforced for non-public-key auth callbacks
+      - CVE-2026-78662: ssh: a malicious peer could flood an undecided channel's incoming requests, deadlocking the connection
+      - CVE-2026-56855: ssh: a malicious peer could send crafted messages on an established channel, deadlocking the connection
+    - Update golang.org/x/image to v0.45.0 to fix CVE-2026-46603 (Nick Craig-Wood)
+      - CVE-2026-46603: excessive memory allocation during VP8L decoding
+  - fs: Confine directory listing entries that escape the root GHSA-3vxh-3pcx-9m8q GHSA-38xv-hf3p-h7mq CVE-PENDING (Nick Craig-Wood)
+  - fshttp: Don't send `--header` values to other hosts on redirect GHSA-486v-q2wf-fp2r CVE-PENDING (Nick Craig-Wood)
+  - http: Don't leak configured headers to other hosts or over plaintext on redirect GHSA-486v-q2wf-fp2r CVE-PENDING (Nick Craig-Wood)
+  - lib/rest: Check HTTPS downgrades against the original request on redirect GHSA-486v-q2wf-fp2r CVE-PENDING (Nick Craig-Wood)
+  - local
+    - Fix dir metadata escaping the root through a planted symlink GHSA-f8g7-2xjc-7mfh CVE-PENDING (Nick Craig-Wood)
+    - Fix btime escaping the root via a planted symlink GHSA-f8g7-2xjc-7mfh CVE-PENDING (Nick Craig-Wood)
+    - Fix panic on Range request past the end of a symlink GHSA-p6m2-r3w9-mpxw CVE-PENDING (Nick Craig-Wood)
+  - serve docker
+    - Reject volume names that escape the base directory GHSA-p6vx-hf7p-98j6 (Nick Craig-Wood)
+    - Reject volume names resolving to the base directory itself GHSA-p6vx-hf7p-98j6 (Nick Craig-Wood)
+    - Re-derive volume mountpoint from name when restoring state GHSA-p6vx-hf7p-98j6 (Nick Craig-Wood)
+  - serve ftp: Fix auth-proxy sessions sharing credentials by username GHSA-c476-6w5q-jw77 CVE-PENDING (Nick Craig-Wood)
+  - serve s3
+    - Fix memory exhaustion from client-declared multipart part size GHSA-2p48-j3qc-rx9f CVE-PENDING (Nick Craig-Wood)
+    - Reject bogus multipart part sizes in the reorder buffer GHSA-2p48-j3qc-rx9f (Nick Craig-Wood)
+    - Fix auth proxy accepting any request signed with an empty secret GHSA-xwwr-4h3p-r22c CVE-PENDING (Nick Craig-Wood)
+      - **NB** the auth proxy protocol for `serve s3` has changed - the proxy program is now given the access key ID as `user` and must return the secret as `_secret_access_key`
+    - Fix each server accepting the `--auth-key` credentials of all the others (Nick Craig-Wood)
+    - Fix misleading anonymous access log when using an auth proxy via rc GHSA-p569-5gjg-9cmj CVE-PENDING (Nick Craig-Wood)
+  - serve sftp: Fix auth proxy configured via rc being silently ignored GHSA-p569-5gjg-9cmj CVE-PENDING (Nick Craig-Wood)
+- Bug Fixes
+  - accounting
+    - Fix memory leak on long-running rcd (nielash)
+    - Fix memory leak from stats groups on long-running rcd (nielash)
+    - Fix bwlimit burst overflow (Rayan Salhab)
+  - bisync
+    - Fix memory leak when running via the rc (nielash)
+    - Fix failed transfers of empty files being recorded as synced (Nick Craig-Wood)
+  - build: Make go1.26 the minimum required version as needed by golang.org/x/crypto v0.56.0 (Nick Craig-Wood)
+  - config: Redact env var config values in logs (Pastalikek65)
+  - doc fixes (Anton Karpov, CAOShurong, Dean Chen, Nick Craig-Wood, Recoordinate, Rodrigo Rodrigues, Shantanav Mukherjee, shaurya)
+  - lib/batcher: Prevent commits racing shutdown (Loi Nguyen)
+  - lib/transform: Fix panic in `truncate_keep_extension` (VXNCXNX)
+  - multipart: Fix chunked uploads storing truncated objects when the source ends early (Nick Craig-Wood)
+  - operations: Fix silent truncation of streaming uploads whose source ends early (Nick Craig-Wood)
+  - serve
+    - Fix VFS instance leaks on server startup failures and shutdown (Hakan İSMAİL)
+    - Pass the client IP address to the auth proxy (am-at-enrollvb)
+  - serve http: Prevent scrolling to the top on page reload (Sune Mølgaard)
+  - serve nfs: Fix EIO when creating symlinks with `--vfs-links` (SillyZir)
+  - serve s3
+    - Fix failed uploads deleting or corrupting the object at the key (Nick Craig-Wood)
+    - Fix crash when a multipart upload is aborted while a part is uploading (Nick Craig-Wood)
+    - Fix modtime not being set when only mtime metadata is supplied on PUT (Nick Craig-Wood)
+    - Upload all multipart uploads via the VFS so they obey `--bwlimit` and show in stats (Nick Craig-Wood)
+    - Reserve the `.rclone_temp_` prefix for temporary objects (Nick Craig-Wood)
+    - Clean up abandoned multipart uploads after `--multipart-expiry` (Nick Craig-Wood)
+  - vfscache
+    - Fix reader deadlock when the item size drops below the read offset (Dave)
+    - Fix log message growing without bound on repeated write errors (Vijay Misal)
+  - walk: Stop directory traversal when the context is cancelled (Rahman Yilmaz)
+- VFS
+  - Synchronize poll updates with shutdown (Loi Nguyen)
+  - Make poll shutdown lifecycle deterministic (Loi Nguyen)
+- Crypt
+  - Fix hash mismatches with `no_data_encryption` on backends which check upload hashes (Nick Craig-Wood)
+  - Fix directory names which look like versioned file names (TowyTowy)
+  - Warn about directories with legacy version-like encrypted names (Nick Craig-Wood)
+- Azure Blob
+  - Fix Entra ID server-side copy source authentication (Edward Klesel)
+  - Fix spurious vfs cache corruption errors during chunked reads (Nick Craig-Wood)
+- Azurefiles
+  - Fix zero padded files being created when the source ends early (Nick Craig-Wood)
+- Box
+  - Fix truncated files being uploaded successfully when the source ends early (Rohit Behera)
+- Compress
+  - Fix corrupted objects being created when the source ends early (Nick Craig-Wood)
+- Drive
+  - Don't list trashed files when removing a directory into the trash (alliasgher)
+- Dropbox
+  - Preserve Paper export paths on lookup (Loi Nguyen)
+  - Fix context cancellation (e.g. `--max-duration` limit) not stopping in-flight requests (debaditya)
+  - Fix chunked uploads of truncated files never finishing (Nick Craig-Wood)
+  - Don't retry chunked upload requests when the upload has been cancelled (Nick Craig-Wood)
+  - Decode received shared-file names (Sanjay Kanth A)
+  - Fix ChangeNotify when the root's case differs from Dropbox's (Loi Nguyen)
+- Filelu
+  - Fix truncated files being uploaded successfully when the source ends early (Nick Craig-Wood)
+  - Fix duplicate root path during multipart folder creation (kingston125)
+- Huaweidrive
+  - Fix truncated files being uploaded successfully when the source ends early (Rohit Behera)
+- Iclouddrive
+  - Fix uploads into an app container failing with 412 (Christian De Santis)
+- Internetarchive
+  - Fix corrupted files being created when the source ends early (Nick Craig-Wood)
+- Internxt
+  - Persist rotated token returned by the user info call (0rangeSeaW0lf)
+- Onedrive
+  - Fix 403 Forbidden for configuration personal onedrive (machsix)
+  - Fall back to manual drive ID entry when drive listing fails (SillyZir)
+  - Don't retry multipart upload chunk on 404 (upload session not found) (water)
+- Overview
+  - Fix "internal error: no overview data found" on 32 bit architectures (Nick Craig-Wood)
+- Pikpak
+  - Fix truncated files being created when the source ends early (Nick Craig-Wood)
+  - Fix truncated single part uploads reported as ok when source ends early (Nick Craig-Wood)
+- Protondrive
+  - Fix files uploaded with v1.75.0 not being readable in the Proton apps (Nick Craig-Wood)
+  - Fix corrupted uploads after a retried upload error (Nick Craig-Wood)
+- Quatrix
+  - Fix chunk upload retries and fix memory leak (Nick Craig-Wood)
+- S3
+  - Update Mega endpoints (Nick Craig-Wood)
+  - Treat UploadPart success without ETag as retryable error (CAOShurong)
+  - Fix server side copy failing with `--s3-no-head-object` (Anatoly Tarnavsky)
+- Sia
+  - Fix corrupted files being created when the source ends early (Nick Craig-Wood)
+- Smb
+  - Reuse the upload connection for SetModTime (alliasgher)
+- WebDAV
+  - Fix SetModTime failing and hashes missing on Nextcloud (Nick Craig-Wood)
+- Yandex
+  - Fix truncated files being uploaded successfully when the source ends early (Rohit Behera)
+
 ## v1.75.0 - 2026-07-31
 
 [See commits](https://github.com/rclone/rclone/compare/v1.74.0...v1.75.0)
@@ -14,11 +352,11 @@ description: "Rclone Changelog"
   - [Scality](/s3/#scality) (RING / ARTESCA)
   - [Zero Services](/s3/#zero-z3) (ZERO-Z3)
 - Security
-  - archive: Don't crash on malformed squashfs images GHSA-6jcg-q3wp-x2f4 CVE-PENDING (Nick Craig-Wood)
-  - ftp: Fix ftp command injection when encoding doesn't include CRLF GHSA-8c48-q9wj-3w37 CVE-PENDING (Nick Craig-Wood)
+  - archive: Don't crash on malformed squashfs images GHSA-6jcg-q3wp-x2f4 (Nick Craig-Wood)
+  - ftp: Fix ftp command injection when encoding doesn't include CRLF GHSA-8c48-q9wj-3w37 CVE-2026-71311 (Nick Craig-Wood)
   - lib/http: Use TLS on all `--addr` listeners when `--cert` and `--key` are set GHSA-mfvx-7rcj-9m5g (Nick Craig-Wood)
-  - lib/proxy: Fix unbounded HTTP CONNECT headers causing OOM GHSA-xhf4-832v-7xcr CVE-PENDING (Nick Craig-Wood)
-  - local: Stop source file names escaping the destination directory GHSA-7p4m-qxvv-g567 CVE-PENDING (Nick Craig-Wood)
+  - lib/proxy: Fix unbounded HTTP CONNECT headers causing OOM GHSA-xhf4-832v-7xcr CVE-2026-71310 (Nick Craig-Wood)
+  - local: Stop source file names escaping the destination directory GHSA-7p4m-qxvv-g567 CVE-2026-71313 (Nick Craig-Wood)
   - rc
     - Don't expose pprof debug handlers on an unauthenticated server GHSA-mfvx-7rcj-9m5g CVE-PENDING (Nick Craig-Wood)
     - Require authentication to list the remotes with `--rc-serve` GHSA-mfvx-7rcj-9m5g (Nick Craig-Wood)
@@ -27,9 +365,9 @@ description: "Rclone Changelog"
     - Fix redirect credential leaks, reject HTTPS->HTTP and strip secrets GHSA-8mxv-9xhp-86h4 (Nick Craig-Wood)
     - Strip S3 Express session token on cross-host redirects GHSA-8mxv-9xhp-86h4 (Nick Craig-Wood)
   - serve ftp: Use constant time comparison for password check GHSA-mfvx-7rcj-9m5g (Nick Craig-Wood)
-  - serve restic: Fix path traversal above the served directory GHSA-45pq-889g-fcgh CVE-PENDING (Nick Craig-Wood)
+  - serve restic: Fix path traversal above the served directory GHSA-45pq-889g-fcgh CVE-2026-71309 (Nick Craig-Wood)
   - serve sftp: Don't crash the whole server on a bad request GHSA-6jcg-q3wp-x2f4 (Nick Craig-Wood)
-  - sftp: Fix command injection via crafted filenames on PowerShell remotes GHSA-2m8m-jhrm-w6j2 CVE-PENDING (Nick Craig-Wood)
+  - sftp: Fix command injection via crafted filenames on PowerShell remotes GHSA-2m8m-jhrm-w6j2 CVE-2026-71312 (Nick Craig-Wood)
   - vfs: Don't crash the process if a backend panics on a background goroutine GHSA-6jcg-q3wp-x2f4 (Nick Craig-Wood)
   - webdav
     - Fix HTTPS to HTTP redirects leaking credentials GHSA-h4mf-4v27-hggj (Nick Craig-Wood)

@@ -19,7 +19,6 @@ import (
 	"path"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,15 +26,12 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
-	"github.com/rclone/rclone/backend/azureblob/arrowlist"
 	"github.com/rclone/rclone/backend/azureblob/auth"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/chunksize"
@@ -52,6 +48,7 @@ import (
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/pool"
 	"github.com/rclone/rclone/lib/readers"
+	"github.com/rclone/rclone/lib/rest"
 	"github.com/rclone/rclone/lib/transferaccounter"
 	"golang.org/x/sync/errgroup"
 )
@@ -70,6 +67,7 @@ const (
 	defaultChunkSize      = 4 * fs.Mebi
 	defaultAccessTier     = blob.AccessTier("") // FIXME AccessTierNone
 	sasCopyValidity       = time.Hour           // how long SAS should last when doing server side copy
+	sasCopyStartSkew      = 15 * time.Minute    // how far back SAS should start to allow for clock skew
 )
 
 // setAcceptEncodingGzip is a per-call policy that sets Accept-Encoding: gzip
@@ -241,40 +239,38 @@ avoid the time out.`,
 			Advanced: true,
 		}, {
 			Name: "use_arrow_list",
-			Help: `Use the experimental Apache Arrow listing format.
+			Help: `Use the Apache Arrow listing format.
 
 If set, directory listings are fetched using the ListBlobs Apache
-Arrow response format instead of XML. This can be faster for very
-large containers.
+Arrow response format instead of XML. Arrow responses are smaller and
+much cheaper to parse, making listings of large containers several
+times faster. Combine with "list_parallelism" for the biggest gains.
 
-This is EXPERIMENTAL and requires the "Blob Listing with Apache Arrow"
-preview feature to be enabled on the storage account. It is NOT
-supported on accounts with a hierarchical namespace (ADLS Gen2) -
-those return a 409 error. If the feature is not enabled the server
-returns XML and the listing transparently falls back to the normal XML
-path (logged at debug level).
-
-Not supported with connection_string auth - falls back to normal
-listing.`,
+"Blob Listing with Apache Arrow" is in public preview at Microsoft and
+is only supported on flat namespace accounts. On accounts with a
+hierarchical namespace (ADLS Gen2), or where the feature is otherwise
+unavailable, the server returns XML and the listing transparently
+falls back to the normal XML path (logged at debug level).`,
 			Default:  false,
 			Advanced: true,
-			Hide:     fs.OptionHideBoth,
 		}, {
 			Name: "list_parallelism",
 			Help: `Number of parallel shards to list a directory with.
 
-EXPERIMENTAL. If set greater than 1, the blob name keyspace of each
-directory is split into this many ranges which are listed concurrently
-using the Arrow startFrom/endBefore range parameters. This can
-dramatically speed up listing containers with millions of objects, for
-both recursive (ListR) and single directory listings.
+If set greater than 1, the blob name keyspace of each directory is
+split into ranges which are listed concurrently using the Arrow
+startFrom/endBefore range parameters. This can dramatically speed up
+listing containers with millions of objects, for both recursive
+(ListR) and single directory listings. Speed keeps improving up to a
+parallelism of around 30.
 
 This has no effect unless "use_arrow_list" is also set, as Arrow is the
-only listing path that supports server-side name ranges. The default of
-0 (or 1) lists sequentially.`,
+only listing path that supports server-side name ranges. If the
+account does not support range listing (e.g. it has a hierarchical
+namespace) the listing falls back to sequential. The default of 0 (or
+1) lists sequentially.`,
 			Default:  0,
 			Advanced: true,
-			Hide:     fs.OptionHideBoth,
 		}, {
 			Name: "access_tier",
 			Help: `Access tier of blob: hot, cool, cold or archive.
@@ -449,10 +445,8 @@ type Fs struct {
 	opt                Options                      // parsed config options
 	ci                 *fs.ConfigInfo               // global config
 	features           *fs.Features                 // optional features
-	cntSVCcacheMu      sync.Mutex                   // mutex to protect cntSVCcache and arrowCntSVCcache
+	cntSVCcacheMu      sync.Mutex                   // mutex to protect cntSVCcache
 	cntSVCcache        map[string]*container.Client // reference to containerClient per container
-	arrowCntSVCcache   map[string]*arrowlist.Client // reference to arrowlist client per container
-	arrowClientOpts    *arrowlist.ClientOptions     // client options for the arrowlist clients
 	arrowXMLFallback   atomic.Bool                  // set once the server answers XML so parallel listing is not retried
 	svc                *service.Client              // client to access azblob
 	cred               azcore.TokenCredential       // how to generate tokens (may be nil)
@@ -671,15 +665,14 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
-		name:             name,
-		opt:              *opt,
-		ci:               ci,
-		pacer:            fs.NewPacer(ctx, pacer.NewS3(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
-		uploadToken:      pacer.NewTokenDispenser(ci.Transfers),
-		copyToken:        pacer.NewTokenDispenser(opt.CopyTotalConcurrency),
-		cache:            bucket.NewCache(),
-		cntSVCcache:      make(map[string]*container.Client, 1),
-		arrowCntSVCcache: make(map[string]*arrowlist.Client, 1),
+		name:        name,
+		opt:         *opt,
+		ci:          ci,
+		pacer:       fs.NewPacer(ctx, pacer.NewS3(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
+		uploadToken: pacer.NewTokenDispenser(ci.Transfers),
+		copyToken:   pacer.NewTokenDispenser(opt.CopyTotalConcurrency),
+		cache:       bucket.NewCache(),
+		cntSVCcache: make(map[string]*container.Client, 1),
 	}
 	f.publicAccess = container.PublicAccessType(opt.PublicAccess)
 	f.setRoot(root)
@@ -726,15 +719,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	f.usingSharedKeyCred = res.UsingSharedKeyCred
 	f.anonymous = res.Anonymous
 
-	// Client options for the arrowlist clients, using the same transport and
-	// gzip policy as the SDK clients built above.
-	f.arrowClientOpts = &arrowlist.ClientOptions{
-		ClientOptions: azcore.ClientOptions{
-			Transport:       auth.Transporter(ctx),
-			PerCallPolicies: []policy.Policy{setAcceptEncodingGzip{}},
-		},
-	}
-
 	// if using Container level SAS put the container client into the cache
 	if opt.SASURL != "" && res.Container != "" {
 		_ = f.cntSVC(res.Container)
@@ -771,44 +755,6 @@ func (f *Fs) cntSVC(containerName string) (containerClient *container.Client) {
 		f.cntSVCcache[containerName] = containerClient
 	}
 	return containerClient
-}
-
-// errArrowAuthUnsupported is returned by arrowCntSVC when the configured
-// credentials can't be used for Arrow listing.
-var errArrowAuthUnsupported = errors.New("credentials not supported for Arrow listing (connection_string auth is not supported)")
-
-// return the arrowlist client for the container passed in
-//
-// Returns errArrowAuthUnsupported if the configured credentials can't be
-// reused for the arrowlist client's pipeline.
-func (f *Fs) arrowCntSVC(containerName string) (client *arrowlist.Client, err error) {
-	// The container URL includes any SAS token in its query
-	url := f.cntSVC(containerName).URL()
-	f.cntSVCcacheMu.Lock()
-	defer f.cntSVCcacheMu.Unlock()
-	if client, ok := f.arrowCntSVCcache[containerName]; ok {
-		return client, nil
-	}
-	switch {
-	case f.usingSharedKeyCred:
-		// Covers account+key and the emulator (auth fills in Account/Key)
-		var cred *arrowlist.SharedKeyCredential
-		cred, err = arrowlist.NewSharedKeyCredential(f.opt.Account, f.opt.Key)
-		if err == nil {
-			client, err = arrowlist.NewClientWithSharedKeyCredential(url, cred, f.arrowClientOpts)
-		}
-	case f.cred != nil:
-		client, err = arrowlist.NewClient(url, f.cred, f.arrowClientOpts)
-	case f.anonymous || f.opt.SASURL != "":
-		client, err = arrowlist.NewClientWithNoCredential(url, f.arrowClientOpts)
-	default:
-		return nil, errArrowAuthUnsupported
-	}
-	if err != nil {
-		return nil, err
-	}
-	f.arrowCntSVCcache[containerName] = client
-	return client, nil
 }
 
 // Return an Object from a path
@@ -1187,27 +1133,25 @@ func (f *Fs) list(ctx context.Context, containerName, directory, prefix string, 
 		delimiter = "/"
 	}
 
-	opts := &arrowlist.ListBlobsHierarchyOptions{
-		ListBlobsHierarchyOptions: container.ListBlobsHierarchyOptions{
-			// Copy, Metadata, Snapshots, UncommittedBlobs, Deleted, Tags, Versions, LegalHold, ImmutabilityPolicy, DeletedWithVersions bool
-			Include: container.ListBlobsInclude{
-				Copy:             false,
-				Metadata:         true,
-				Snapshots:        false,
-				UncommittedBlobs: false,
-				Deleted:          false,
-			},
-			Prefix:     &directory,
-			MaxResults: &maxResults,
+	opts := &container.ListBlobsHierarchyOptions{
+		// Copy, Metadata, Snapshots, UncommittedBlobs, Deleted, Tags, Versions, LegalHold, ImmutabilityPolicy, DeletedWithVersions bool
+		Include: container.ListBlobsInclude{
+			Copy:             false,
+			Metadata:         true,
+			Snapshots:        false,
+			UncommittedBlobs: false,
+			Deleted:          false,
 		},
+		Prefix:     &directory,
+		MaxResults: &maxResults,
 	}
-	// Experimental: request the Apache Arrow listing format. The arrowlist
-	// pager requests an Arrow IPC stream and decodes it, falling back to XML
-	// if the account doesn't have Arrow listing enabled. Skip the
-	// maxResults==1 probe (isEmpty) which doesn't benefit.
+	// Request the Apache Arrow listing format. The SDK pager requests an
+	// Arrow IPC stream and decodes it, falling back to XML if the account
+	// doesn't have Arrow listing enabled. Skip the maxResults==1 probe
+	// (isEmpty) which doesn't benefit.
 	useArrow := f.opt.UseArrowList && maxResults != 1
 	if useArrow {
-		opts.UseArrowFormat = to.Ptr(true)
+		opts.ResponseFormat = container.StorageResponseFormatArrow
 	}
 
 	var foundItems int
@@ -1238,25 +1182,11 @@ func (f *Fs) list(ctx context.Context, containerName, directory, prefix string, 
 // listBlobsPager runs the hierarchy listing described by opts, calling fn for
 // each blob and subdirectory, and returns the number of raw items seen.
 // delimiter selects flat (recurse) vs hierarchical listing. If opts requests
-// the Apache Arrow format the listing goes through the arrowlist pager
-// (falling back to the SDK pager if the credentials don't support it); if the
-// service then answers with XML (Arrow listing not enabled) a debug message
-// is logged.
-func (f *Fs) listBlobsPager(ctx context.Context, containerName, directory, prefix string, addContainer bool, opts *arrowlist.ListBlobsHierarchyOptions, delimiter string, fn listFn) (foundItems int, err error) {
-	useArrow := opts.UseArrowFormat != nil && *opts.UseArrowFormat
-	var pager *runtime.Pager[container.ListBlobsHierarchyResponse]
-	if useArrow {
-		arrowSVC, err := f.arrowCntSVC(containerName)
-		if err != nil {
-			fs.Debugf(f, "Not using Arrow listing: %v", err)
-			useArrow = false
-		} else {
-			pager = arrowSVC.NewListBlobsHierarchyPager(delimiter, opts)
-		}
-	}
-	if pager == nil {
-		pager = f.cntSVC(containerName).NewListBlobsHierarchyPager(delimiter, &opts.ListBlobsHierarchyOptions)
-	}
+// the Apache Arrow format and the service answers with XML (Arrow listing
+// not enabled) a debug message is logged.
+func (f *Fs) listBlobsPager(ctx context.Context, containerName, directory, prefix string, addContainer bool, opts *container.ListBlobsHierarchyOptions, delimiter string, fn listFn) (foundItems int, err error) {
+	useArrow := opts.ResponseFormat == container.StorageResponseFormatArrow
+	pager := f.cntSVC(containerName).NewListBlobsHierarchyPager(delimiter, opts)
 	checkedArrow := false
 	for pager.More() {
 		var response container.ListBlobsHierarchyResponse
@@ -1272,7 +1202,7 @@ func (f *Fs) listBlobsPager(ctx context.Context, containerName, directory, prefi
 		// but not accelerated.
 		if useArrow && !checkedArrow && err == nil {
 			checkedArrow = true
-			if response.ContentType == nil || !strings.HasPrefix(*response.ContentType, arrowlist.ArrowContentType) {
+			if response.ContentType == nil || !strings.HasPrefix(*response.ContentType, arrowContentType) {
 				fs.Debugf(f, "Apache Arrow listing requested but server returned XML - Blob Listing with Apache Arrow may not be enabled on this account")
 			}
 		}
@@ -1827,7 +1757,7 @@ func (f *Fs) getUserDelegation(ctx context.Context) (*service.UserDelegationCred
 	}
 
 	// Validity window
-	start := time.Now().UTC()
+	start := time.Now().UTC().Add(-sasCopyStartSkew)
 	expiry := start.Add(2 * sasCopyValidity)
 	startStr := start.Format(time.RFC3339)
 	expiryStr := expiry.Format(time.RFC3339)
@@ -1876,7 +1806,7 @@ func (o *Object) getAuth(ctx context.Context, noAuth bool) (srcURL string, err e
 		// Build the SAS values
 		perms := sas.BlobPermissions{Read: true}
 		container, containerPath := o.split()
-		start := time.Now().UTC()
+		start := time.Now().UTC().Add(-sasCopyStartSkew)
 		expiry := start.Add(sasCopyValidity)
 		vals := sas.BlobSignatureValues{
 			StartTime:     start,
@@ -2346,6 +2276,16 @@ func (o *Object) decodeMetaDataFromDownloadResponse(info *blob.DownloadStreamRes
 	} else {
 		size = *info.ContentLength
 	}
+	// On a range request Content-Length is the length of the range, not the object, so take the
+	// object's size from the total in Content-Range instead.
+	if info.ContentRange != nil {
+		contentRange, err := rest.ParseContentRange(*info.ContentRange)
+		if err != nil {
+			fs.Debugf(o, "Failed to parse Content-Range %q: %v", *info.ContentRange, err)
+		} else if contentRange.Size >= 0 {
+			size = contentRange.Size
+		}
+	}
 	if isDirectoryMarker(size, metadata, o.remote) {
 		return fs.ErrorNotAFile
 	}
@@ -2379,22 +2319,6 @@ func (o *Object) decodeMetaDataFromDownloadResponse(info *blob.DownloadStreamRes
 	// 	o.accessTier = blob.AccessTier(*info.AccessTier)
 	// }
 	o.setMetadata(metadata)
-
-	// If it was a Range request, the size is wrong, so correct it
-	if info.ContentRange != nil {
-		contentRange := *info.ContentRange
-		slash := strings.IndexRune(contentRange, '/')
-		if slash >= 0 {
-			i, err := strconv.ParseInt(contentRange[slash+1:], 10, 64)
-			if err == nil {
-				o.size = i
-			} else {
-				fs.Debugf(o, "Failed to find parse integer from in %q: %v", contentRange, err)
-			}
-		} else {
-			fs.Debugf(o, "Failed to find length in %q", contentRange)
-		}
-	}
 	o.contentEncoding = info.ContentEncoding
 
 	// If decompressing then size and md5sum are unknown

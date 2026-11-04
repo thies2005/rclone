@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"strings"
+	"time"
 
 	"github.com/rclone/rclone/cmd"
 	"github.com/rclone/rclone/cmd/serve"
@@ -39,11 +40,27 @@ var OptionsInfo = fs.Options{{
 }, {
 	Name:    "disable_multipart_streaming",
 	Default: false,
-	Help:    "Buffer multipart uploads in memory instead of streaming them to the backend (see the Multipart uploads docs section)",
+	Help:    "Buffer multipart uploads in memory instead of streaming them to the backend",
 }, {
 	Name:    "multipart_streaming_buffer_limit",
 	Default: fs.SizeSuffix(256 * 1024 * 1024),
-	Help:    "Maximum memory buffered per streamed multipart upload for parts arriving out of order, 0 for unlimited (see the Multipart uploads docs section)",
+	Help:    "Maximum memory buffered per streamed multipart upload for parts arriving out of order, 0 for unlimited",
+}, {
+	Name:    "multipart_streaming_buffer_total",
+	Default: fs.SizeSuffix(1024 * 1024 * 1024),
+	Help:    "Maximum memory buffered by all the streamed multipart uploads of a user for parts arriving out of order, 0 for unlimited",
+}, {
+	Name:    "multipart_max_uploads",
+	Default: 1000,
+	Help:    "Maximum number of streamed multipart uploads a user can have in progress at once, 0 for unlimited",
+}, {
+	Name:    "metadata_max_objects",
+	Default: 100000,
+	Help:    "Maximum number of objects of a user whose metadata is kept in memory, 0 for unlimited",
+}, {
+	Name:    "multipart_expiry",
+	Default: fs.Duration(24 * time.Hour),
+	Help:    "Abort incomplete multipart uploads idle for longer than this, 0 to keep forever",
 }}.
 	Add(httplib.ConfigInfo).
 	Add(httplib.AuthConfigInfo)
@@ -57,6 +74,10 @@ type Options struct {
 	NoCleanup                     bool          `config:"no_cleanup"`
 	DisableMultipartStreaming     bool          `config:"disable_multipart_streaming"`
 	MultipartStreamingBufferLimit fs.SizeSuffix `config:"multipart_streaming_buffer_limit"`
+	MultipartStreamingBufferTotal fs.SizeSuffix `config:"multipart_streaming_buffer_total"`
+	MultipartMaxUploads           int           `config:"multipart_max_uploads"`
+	MetadataMaxObjects            int           `config:"metadata_max_objects"`
+	MultipartExpiry               fs.Duration   `config:"multipart_expiry"`
 	Auth                          httplib.AuthConfig
 	HTTP                          httplib.Config
 }
@@ -114,7 +135,7 @@ var Command = &cobra.Command{
 	},
 	Use:   "s3 remote:path",
 	Short: `Serve remote:path over s3.`,
-	Long:  help() + strings.TrimSpace(httplib.AuthHelp(flagPrefix)+httplib.Help(flagPrefix)+vfs.Help()),
+	Long:  help() + strings.TrimSpace(httplib.AuthHelp(flagPrefix)+httplib.Help(flagPrefix)+vfs.Help()+proxy.Help),
 	RunE: func(command *cobra.Command, args []string) error {
 		var f fs.Fs
 		if proxy.Opt.AuthProxy == "" {

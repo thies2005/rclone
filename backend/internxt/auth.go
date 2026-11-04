@@ -28,6 +28,7 @@ type userInfo struct {
 	Bucket       string
 	BridgeUser   string
 	UserID       string
+	NewToken     string
 }
 
 type userInfoConfig struct {
@@ -66,6 +67,7 @@ func getUserInfo(ctx context.Context, cfg *userInfoConfig) (*userInfoResult, err
 		Bucket:       resp.User.Bucket,
 		BridgeUser:   resp.User.BridgeUser,
 		UserID:       resp.User.UserID,
+		NewToken:     resp.NewToken,
 	}
 
 	useToken := resp.NewToken

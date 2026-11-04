@@ -20,11 +20,13 @@ it will be resolved relative to this url, according to the URL standard. This
 means with remote url `https://beta.rclone.org/branch` and path `fix`, the
 resolved URL will be `https://beta.rclone.org/branch/fix`, while with path
 `/fix` the resolved URL will be `https://beta.rclone.org/fix` as the absolute
-path is resolved from the root of the domain.
+path is resolved from the root of the domain. The path can't change the scheme,
+host or user of the configured url, so a path such as `//other.example.com/fix`
+is rejected.
 
 If the path following the `remote:` ends with `/` it will be assumed to point
 to a directory. If the path does not end with `/`, then a HEAD request is sent
-and the response used to decide if it it is treated as a file or a directory
+and the response used to decide if it is treated as a file or a directory
 (run with `-vv` to see details). When [--http-no-head](#http-no-head) is
 specified, a path without ending `/` is always assumed to be a file. If rclone
 incorrectly assumes the path is a file, the solution is to specify the path with
@@ -209,6 +211,12 @@ The input format is comma separated list of key,value pairs.  Standard
 For example, to set a Cookie use 'Cookie,name=value', or '"Cookie","name=value"'.
 
 You can set multiple headers, e.g. '"Cookie","name=value","Authorization","xxx"'.
+
+The headers are only sent to the host in the configured URL. If the
+server redirects to another host (including a subdomain or a different
+port) the headers are not sent to it, or to any further hop in that
+redirect chain. When headers are set, a redirect from https to http is
+refused as it would send them in cleartext.
 
 Properties:
 

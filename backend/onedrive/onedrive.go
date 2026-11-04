@@ -275,16 +275,13 @@ cases, rclone will fall back to normal copy (which will be slightly slower).`,
 			Default: false,
 			Help: `Remove all versions on modifying operations.
 
-Onedrive for business creates versions when rclone uploads new files
+Onedrive creates versions when rclone uploads new files
 overwriting an existing one and when it sets the modification time.
 
 These versions take up space out of the quota.
 
 This flag checks for versions after file upload and setting
 modification time and removes all but the last version.
-
-**NB** Onedrive personal can't currently delete versions so don't use
-this flag there.
 `,
 			Advanced: true,
 		}, {
@@ -294,8 +291,7 @@ this flag there.
 Normally files will get sent to the recycle bin on deletion. Setting
 this flag causes them to be permanently deleted. Use with care.
 
-OneDrive personal accounts do not support the permanentDelete API,
-it only applies to OneDrive for Business and SharePoint document libraries.
+This works with OneDrive for Business, SharePoint document libraries, and OneDrive personal accounts, including free accounts.
 `,
 			Advanced: true,
 			Default:  false,
@@ -324,14 +320,18 @@ it only applies to OneDrive for Business and SharePoint document libraries.
 				Help:  "Creates a read-write link to the item.",
 			}, {
 				Value: "embed",
-				Help:  "Creates an embeddable link to the item.",
+				Help:  "Creates an embeddable link to the item.\nOnly available in OneDrive personal.",
 			}},
 		}, {
 			Name:    "link_password",
 			Default: "",
 			Help: `Set the password for links created by the link command.
 
-At the time of writing this only works with OneDrive personal paid accounts.
+At the time of writing this works with OneDrive for Business and
+OneDrive personal paid accounts.
+
+OneDrive personal free accounts can't set a password or an expiry time
+(with --expire) on links.
 `,
 			Advanced:  true,
 			Sensitive: true,
@@ -549,31 +549,34 @@ func chooseDrive(ctx context.Context, name string, m configmap.Mapper, srv *rest
 	// We don't have the final ID yet?
 	// query Microsoft Graph
 	if opt.finalDriveID == "" {
-		_, err := srv.CallJSON(ctx, &opt.opts, nil, &drives)
-		if err != nil {
-			return fs.ConfigError("choose_type", fmt.Sprintf("Failed to query available drives: %v", err))
+		_, drivesErr := srv.CallJSON(ctx, &opt.opts, nil, &drives)
+		if drivesErr != nil {
+			fs.Debugf(nil, "Failed to query /me/drives: %v - trying /me/drive", drivesErr)
 		}
-
 		// Also call /me/drive as sometimes /me/drives doesn't return it #4068
 		if opt.opts.Path == "/me/drives" {
-			opt.opts.Path = "/me/drive"
+			meDriveOpts := opt.opts
+			meDriveOpts.Path = "/me/drive"
 			meDrive := api.DriveResource{}
-			_, err := srv.CallJSON(ctx, &opt.opts, nil, &meDrive)
-			if err != nil {
-				return fs.ConfigError("choose_type", fmt.Sprintf("Failed to query available drives: %v", err))
-			}
-			found := false
-			for _, drive := range drives.Drives {
-				if drive.DriveID == meDrive.DriveID {
-					found = true
-					break
+			_, meDriveErr := srv.CallJSON(ctx, &meDriveOpts, nil, &meDrive)
+			if meDriveErr == nil {
+				found := false
+				for _, drive := range drives.Drives {
+					if drive.DriveID == meDrive.DriveID {
+						found = true
+						break
+					}
 				}
+				// add the me drive if not found already
+				if !found {
+					fs.Debugf(nil, "Adding %v to drives list from /me/drive", meDrive)
+					drives.Drives = append(drives.Drives, meDrive)
+				}
+			} else if drivesErr != nil {
+				return fs.ConfigError("driveid", fmt.Sprintf("Failed to query available drives: /me/drives: %v; /me/drive: %v\nEnter the drive ID manually instead", drivesErr, meDriveErr))
 			}
-			// add the me drive if not found already
-			if !found {
-				fs.Debugf(nil, "Adding %v to drives list from /me/drive", meDrive)
-				drives.Drives = append(drives.Drives, meDrive)
-			}
+		} else if drivesErr != nil {
+			return fs.ConfigError("choose_type", fmt.Sprintf("Failed to query available drives: %v", drivesErr))
 		}
 	} else {
 		drives.Drives = append(drives.Drives, api.DriveResource{
@@ -2678,9 +2681,8 @@ func (o *Object) uploadFragment(ctx context.Context, url string, start int64, to
 			}
 			return true, fmt.Errorf("retry this chunk skipping %d bytes: %w", skip, err)
 		} else if err != nil && resp != nil && resp.StatusCode == http.StatusNotFound {
-			fs.Debugf(o, "Received 404 error: assuming eventual consistency problem with session - retrying chunk: %v", err)
-			time.Sleep(5 * time.Second) // a little delay to help things along
-			return true, err
+			fs.Debugf(o, "Received 404 error: upload session not found - not retrying: %v", err)
+			return false, fserrors.NoLowLevelRetryError(err)
 		}
 		if err != nil {
 			return shouldRetry(ctx, resp, err)

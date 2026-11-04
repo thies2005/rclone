@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -96,7 +97,19 @@ func TestVerifyCopy(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// skipIfNoSymlinks skips the test if this process can't create symlinks.
+//
+// Windows grants the privilege only to an elevated process or one running with
+// Developer Mode enabled, so an ordinary user gets ERROR_PRIVILEGE_NOT_HELD.
+func skipIfNoSymlinks(t *testing.T) {
+	t.Helper()
+	if err := os.Symlink("target", filepath.Join(t.TempDir(), "link")); err != nil {
+		t.Skipf("Skipping as symlinks are unavailable: %v", err)
+	}
+}
+
 func TestSymlink(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 	r := fstest.NewRun(t)
 	f := r.Flocal.(*Fs)
@@ -198,6 +211,32 @@ func TestSymlink(t *testing.T) {
 	require.NoError(t, in.Close())
 }
 
+// TestSymlinkRangeBeyondEnd checks range requests on a translated
+// symlink's target string don't panic.
+func TestSymlinkRangeBeyondEnd(t *testing.T) {
+	ctx := context.Background()
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+
+	const target = "file.txt"
+	require.NoError(t, putLink(ctx, f, "symlink.txt", target))
+
+	o, err := f.NewObject(ctx, "symlink.txt"+fs.LinkSuffix)
+	require.NoError(t, err)
+
+	// An offset just past the end and a wildly large offset must both read
+	// empty rather than panicking.
+	for _, start := range []int64{int64(len(target)), int64(len(target)) + 1, math.MaxInt64} {
+		in, err := o.Open(ctx, &fs.RangeOption{Start: start, End: -1})
+		require.NoError(t, err)
+		contents, err := io.ReadAll(in)
+		require.NoError(t, err)
+		require.Empty(t, string(contents))
+		require.NoError(t, in.Close())
+	}
+}
+
 func TestSymlinkError(t *testing.T) {
 	m := configmap.Simple{
 		"links":      "true",
@@ -238,6 +277,7 @@ func linksMode(f *Fs) {
 // faithful backup of the source) but must refuse to write through it, so
 // nothing lands outside the destination (CWE-59).
 func TestSymlinkEscapeWriteThroughBlocked(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 
 	// A directory outside the destination the attacker wants to write into
@@ -273,6 +313,7 @@ func TestSymlinkEscapeWriteThroughBlocked(t *testing.T) {
 // re-validated against the root, so the write-through is refused and nothing
 // escapes.
 func TestSymlinkEscapeNestedBlocked(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 
 	evil := t.TempDir()
@@ -324,6 +365,7 @@ func TestSymlinkEscapeConcurrent(t *testing.T) {
 // use: an in-tree symlink to a sibling directory can still be created and
 // written through, since that write stays inside the destination.
 func TestSymlinkInTreeWriteThroughWorks(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 
 	r := fstest.NewRun(t)
@@ -339,6 +381,133 @@ func TestSymlinkInTreeWriteThroughWorks(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(f.root, "sub", "file.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "world", string(got))
+}
+
+// TestDirMetadataThroughPlantedSymlinkBlocked checks metadata +
+// symlinks can't write outside the root.
+func TestDirMetadataThroughPlantedSymlinkBlocked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks and unix modes not applicable on Windows")
+	}
+	ctx := context.Background()
+
+	// A directory outside the destination whose metadata the attacker targets.
+	evil := t.TempDir()
+	evilDir := filepath.Join(evil, "secret.d")
+	require.NoError(t, os.Mkdir(evilDir, 0700))
+	evilMtime := fstest.Time("2016-06-07T08:09:10Z")
+	require.NoError(t, os.Chtimes(evilDir, evilMtime, evilMtime))
+
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+
+	// The planted symlink dst/pwn -> outside, faithfully reproduced by --links.
+	require.NoError(t, putLink(ctx, f, "pwn", evilDir))
+
+	// The source now presents "pwn" as a directory with attacker-chosen mode
+	// and mtime. Applying it must not reach through the planted symlink.
+	metadata := fs.Metadata{
+		"mode":  "0777",
+		"mtime": "2001-02-03T04:05:06Z",
+	}
+	_, err := f.MkdirMetadata(ctx, "pwn", metadata)
+	require.Error(t, err, "applying metadata through a planted symlink should be refused")
+
+	// The outside directory's mode and mtime must be unchanged.
+	fi, err := os.Stat(evilDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0700), fi.Mode().Perm(), "chmod escaped through planted symlink to %q", evilDir)
+	require.True(t, fi.ModTime().Equal(evilMtime), "chtimes escaped through planted symlink to %q", evilDir)
+}
+
+// TestDirSetModTimeThroughPlantedSymlinkBlocked checks we can't
+// chtimes outside the root with --links
+func TestDirSetModTimeThroughPlantedSymlinkBlocked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks not applicable on Windows")
+	}
+	ctx := context.Background()
+
+	evil := t.TempDir()
+	evilDir := filepath.Join(evil, "secret.d")
+	require.NoError(t, os.Mkdir(evilDir, 0700))
+	evilMtime := fstest.Time("2016-06-07T08:09:10Z")
+	require.NoError(t, os.Chtimes(evilDir, evilMtime, evilMtime))
+
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+
+	require.NoError(t, putLink(ctx, f, "pwn", evilDir))
+
+	err := f.DirSetModTime(ctx, "pwn", fstest.Time("2001-02-03T04:05:06Z"))
+	require.Error(t, err, "setting dir modtime through a planted symlink should be refused")
+
+	fi, err := os.Stat(evilDir)
+	require.NoError(t, err)
+	require.True(t, fi.ModTime().Equal(evilMtime), "chtimes escaped through planted symlink to %q", evilDir)
+}
+
+// TestDirMetadataInTreeWorks checks the root confinement doesn't
+// break legitimate dir metadata.
+func TestDirMetadataInTreeWorks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix modes not applicable on Windows")
+	}
+	ctx := context.Background()
+
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+
+	metadata := fs.Metadata{
+		"mode":  "0705",
+		"mtime": "2001-02-03T04:05:06Z",
+	}
+	_, err := f.MkdirMetadata(ctx, "sub", metadata)
+	require.NoError(t, err)
+
+	fi, err := os.Stat(filepath.Join(f.root, "sub"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0705), fi.Mode().Perm())
+	require.True(t, fi.ModTime().Equal(fstest.Time("2001-02-03T04:05:06Z")))
+}
+
+// TestDirBTimeThroughPlantedSymlinkBlocked checks a btime write
+// through a symlink can't escape the root.
+func TestDirBTimeThroughPlantedSymlinkBlocked(t *testing.T) {
+	if !haveSetBTime {
+		t.Skip("birth time is not settable on this OS")
+	}
+	ctx := context.Background()
+
+	evil := t.TempDir()
+	evilDir := filepath.Join(evil, "secret.d")
+	require.NoError(t, os.Mkdir(evilDir, 0700))
+
+	// Read the outside dir's btime through a local Fs rooted at evil.
+	evilFsRaw, err := NewFs(ctx, "local", evil, configmap.Simple{})
+	require.NoError(t, err)
+	evilFs := evilFsRaw.(*Fs)
+	readBTime := func() string {
+		o, err := evilFs.newObject("secret.d")
+		require.NoError(t, err)
+		require.NoError(t, o.lstat())
+		m, err := o.Metadata(ctx)
+		require.NoError(t, err)
+		return m["btime"]
+	}
+	before := readBTime()
+
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+	require.NoError(t, putLink(ctx, f, "pwn", evilDir))
+
+	_, _ = f.MkdirMetadata(ctx, "pwn", fs.Metadata{"btime": "2001-02-03T04:05:06Z"})
+
+	require.Equal(t, before, readBTime(), "btime escaped through planted symlink to %q", evilDir)
 }
 
 // TestEncodingEscapeBlocked checks that a name from a malicious source can't
@@ -452,6 +621,154 @@ func TestLocalPath(t *testing.T) {
 	}
 }
 
+// TestLinkSuffixEscapeBlocked checks that in --links mode a name which
+// passes the root check with its ".rclonelink" suffix can't escape the
+// destination once the suffix is removed: "...rclonelink" must not
+// become "..", the parent of the root.
+func TestLinkSuffixEscapeBlocked(t *testing.T) {
+	skipIfNoSymlinks(t)
+	ctx := context.Background()
+	outer := t.TempDir()
+	newLinksFs := func(dir, encoding string) *Fs {
+		fRaw, err := NewFs(ctx, "local", filepath.Join(outer, dir), configmap.Simple{"encoding": encoding})
+		require.NoError(t, err)
+		f := fRaw.(*Fs)
+		linksMode(f)
+		require.NoError(t, f.Mkdir(ctx, ""))
+		return f
+	}
+	f := newLinksFs("dst", encoder.OS.String())
+	s := newLinksFs("slash", "Slash")
+
+	// Stamp the parent of the destinations so a write to it shows up.
+	before := fstest.Time("2011-12-25T12:59:59Z")
+	require.NoError(t, os.Chtimes(outer, before, before))
+	parentUnchanged := func() {
+		t.Helper()
+		fi, err := os.Lstat(outer)
+		require.NoError(t, err)
+		assert.True(t, fi.ModTime().Equal(before), "the parent of the destination was modified")
+	}
+
+	// A directory called "...rclonelink" is created under its own name
+	// and its metadata goes there, not to the parent of the root which
+	// trimming the suffix off its path would address.
+	remote := ".." + fs.LinkSuffix
+	metadata := fs.Metadata{"mtime": "2001-02-03T04:05:06Z"}
+	_, err := f.MkdirMetadata(ctx, remote, metadata)
+	require.NoError(t, err)
+	parentUnchanged()
+
+	// A file called "...rclonelink" is a link called "..", which the
+	// default encoding stores as fullwidth dots like any other name.
+	require.NoError(t, putFile(ctx, f, remote, "target"))
+	fi, err := os.Lstat(filepath.Join(f.root, "．．"))
+	require.NoError(t, err)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink)
+	parentUnchanged()
+
+	// Ordinary translated links still resolve to the file without the suffix.
+	o, err := f.newObject("sub/link" + fs.LinkSuffix)
+	require.NoError(t, err)
+	assert.True(t, o.translatedLink)
+	assert.Equal(t, filepath.Join(f.root, "sub", "link"), o.path)
+
+	// A name which merely contains the suffix is a regular file.
+	o, err = f.newObject("sub/link" + fs.LinkSuffix + ".txt")
+	require.NoError(t, err)
+	assert.False(t, o.translatedLink)
+	assert.Equal(t, filepath.Join(f.root, "sub", "link"+fs.LinkSuffix+".txt"), o.path)
+
+	// An encoding without Dot leaves ".." as a real ".." once the suffix
+	// is gone, so the name is refused instead.
+	require.ErrorIs(t, putFile(ctx, s, remote, "PWNED"), errLinkNameInvalid)
+	_, err = s.MkdirMetadata(ctx, remote, metadata)
+	require.NoError(t, err)
+	parentUnchanged()
+
+	// As is any other name which doesn't leave a file name once the
+	// suffix is removed and the encoding applied.
+	for _, name := range []string{
+		remote,
+		"sub/.." + fs.LinkSuffix,
+		"sub/." + fs.LinkSuffix,
+		"sub/．．" + fs.LinkSuffix,
+		"sub/sub2/．．" + fs.LinkSuffix,
+		"sub/．" + fs.LinkSuffix,
+		"sub/" + fs.LinkSuffix,
+		fs.LinkSuffix,
+	} {
+		_, err = s.newObject(name)
+		assert.ErrorIs(t, err, errLinkNameInvalid, name)
+		assert.True(t, fserrors.IsNoRetryError(err), name)
+	}
+
+	// The root check still applies to the name of the link.
+	_, err = s.newObject("../link" + fs.LinkSuffix)
+	require.ErrorIs(t, err, errPathEscapes)
+
+	if runtime.GOOS == "windows" {
+		// A backslash is a path separator on Windows, so an encoding
+		// without BackSlash can hide ".." behind one.
+		w := newLinksFs("win", "Slash,Dot")
+		_, err = w.newObject(`sub\..` + fs.LinkSuffix)
+		assert.ErrorIs(t, err, errLinkNameInvalid)
+	}
+}
+
+// TestLinkSuffixListSkipsInvalidName checks that with --links a regular
+// file whose name is just the suffix is reported as an error and skipped
+// rather than failing the listing of its whole directory.
+func TestLinkSuffixListSkipsInvalidName(t *testing.T) {
+	ctx := context.Background()
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+	when := fstest.Time("2001-02-03T04:05:06Z")
+	r.WriteFile("sub/"+fs.LinkSuffix, "not a link", when)
+	r.WriteFile("sub/file.txt", "hello", when)
+
+	accounting.Stats(ctx).ResetErrors()
+	entries, err := f.List(ctx, "sub")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "sub/file.txt", entries[0].Remote())
+	assert.Equal(t, int64(1), accounting.Stats(ctx).GetErrors())
+	accounting.Stats(ctx).ResetErrors()
+}
+
+// TestLinkSuffixDirectory checks that in --links mode a directory whose
+// name ends in ".rclonelink" is an ordinary directory. Only files are
+// translated into links, so the suffix must stay in its path rather
+// than making it address a sibling.
+func TestLinkSuffixDirectory(t *testing.T) {
+	ctx := context.Background()
+	r := fstest.NewRun(t)
+	f := r.Flocal.(*Fs)
+	linksMode(f)
+
+	dir := "sub" + fs.LinkSuffix
+	want := filepath.Join(f.root, dir)
+	mtime := fstest.Time("2001-02-03T04:05:06Z")
+
+	d, err := f.MkdirMetadata(ctx, dir, fs.Metadata{"mtime": mtime.Format(time.RFC3339Nano)})
+	require.NoError(t, err)
+	assert.Equal(t, want, d.(*Directory).path)
+	fi, err := os.Lstat(want)
+	require.NoError(t, err)
+	assert.True(t, fi.IsDir())
+	assert.True(t, fi.ModTime().Equal(mtime), "metadata was not written to the directory")
+
+	entries, err := f.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	got, ok := entries[0].(*Directory)
+	require.True(t, ok)
+	assert.Equal(t, dir, got.Remote())
+	assert.Equal(t, want, got.path)
+	assert.False(t, got.translatedLink)
+}
+
 func TestHashWithTypeNone(t *testing.T) {
 	ctx := context.Background()
 	r := fstest.NewRun(t)
@@ -529,6 +846,7 @@ func TestHashOnDelete(t *testing.T) {
 }
 
 func TestMetadata(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 	r := fstest.NewRun(t)
 	const filePath = "metafile.txt"
@@ -805,6 +1123,7 @@ func TestFilter(t *testing.T) {
 }
 
 func testFilterSymlink(t *testing.T, copyLinks bool) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 	r := fstest.NewRun(t)
 	defer r.Finalise()
@@ -909,6 +1228,7 @@ func TestFilterSymlinkLinks(t *testing.T) {
 }
 
 func TestCopySymlink(t *testing.T) {
+	skipIfNoSymlinks(t)
 	ctx := context.Background()
 	r := fstest.NewRun(t)
 	defer r.Finalise()
